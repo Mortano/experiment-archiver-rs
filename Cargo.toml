@@ -1,0 +1,14 @@
+[package]
+name = "experiment-archiver"
+version = "0.1.0"
+edition = "2021"
+authors = ["Pascal Bormann <pascal@pascalbormann.de>"]
+description = "Library for storing data from experiment runs in a PostgreSQL database"
+readme = "README.md"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+postgres = "0.19.5"
+anyhow = "1"
+rand = "0.8.5"
