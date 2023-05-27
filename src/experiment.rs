@@ -7,7 +7,9 @@ use std::{
 use crate::{connect, gen_unique_id, Measurement, Variable, VariableTemplate};
 
 use anyhow::{bail, Context, Result};
+use log::info;
 use postgres::{Client, GenericClient};
+use tabled::builder::Builder;
 
 /// Context for memorizing variable values while running an experiment. This object is thread-safe
 /// so that values can be added safely from multi-threaded code!
@@ -50,6 +52,7 @@ pub struct Experiment {
     description: String,
     researcher: String,
     required_variables: HashSet<Variable>,
+    autolog_runs: bool,
 }
 
 impl Experiment {
@@ -109,6 +112,7 @@ impl Experiment {
                 name,
                 required_variables: variables,
                 researcher,
+                autolog_runs: false,
             })
         }
     }
@@ -127,9 +131,9 @@ impl Experiment {
     /// The function itself has to return a set of all variables for this experiment run together with the values for
     /// those variables. Since all measurements are stored in the same DB table, Variable values are stored as strings.
     /// The ID for the experiment run is returned, through this ID information about the run can be queried from the DB
-    pub fn run<F: FnOnce(&RunContext) -> ()>(&self, func: F) -> Result<String> {
+    pub fn run<F: FnOnce(&RunContext) -> Result<()>>(&self, func: F) -> Result<String> {
         let context = RunContext::from_experiment(&self);
-        func(&context);
+        func(&context).context("Experiment function failed")?;
 
         let measured_variables = context
             .variable_values
@@ -147,7 +151,7 @@ impl Experiment {
 
         let mut db_client =
             crate::postgres::connect().context("Could not connect to postgres DB")?;
-        let last_run_id = self
+        let last_run_number = self
             .get_current_run_number_from_db(&mut db_client)
             .context("Can't get run number of previous run of this experiment")?
             .unwrap_or(0);
@@ -155,15 +159,19 @@ impl Experiment {
         // Insert a new run and one measurement for each variable
         let mut transaction = db_client.transaction().context("Can't start transaction")?;
         let run_id = self
-            .insert_run(last_run_id + 1, &mut transaction)
+            .insert_run(last_run_number + 1, &mut transaction)
             .context("Failed to insert new experiment run into the database")?;
-        for (variable, value) in measured_variables {
-            self.insert_measurement(&variable, &run_id, value, &mut transaction)
+        for (variable, value) in &measured_variables {
+            self.insert_measurement(&variable, &run_id, value.clone(), &mut transaction)
                 .context("Failed to insert new measurement")?;
         }
         transaction
             .commit()
             .context("Failed to commit transaction for inserting result of experiment run")?;
+
+        if self.autolog_runs {
+            Self::log_run(&measured_variables, last_run_number + 1);
+        }
 
         Ok(run_id)
     }
@@ -219,6 +227,12 @@ impl Experiment {
         self.required_variables.iter()
     }
 
+    /// Set the autologging feature to active or inactive. If active, every experiment run will be logged
+    /// using the `log` crate. By default, autologging is disabled
+    pub fn set_autolog_runs(&mut self, autolog_runs: bool) {
+        self.autolog_runs = autolog_runs;
+    }
+
     /// Fetches all experiments from the database
     pub fn all() -> Result<Vec<Experiment>> {
         let mut connection = connect().context("Failed to connect to database")?;
@@ -250,7 +264,7 @@ impl Experiment {
 
                 let variables = Self::query_variables_for_experiment(&id, client).context("Failed to query variables for experiment")?;
 
-                Ok(Some(Experiment { id, name: name.to_owned(), description: row.get("description"), researcher: row.get("researcher"), required_variables: variables }))
+                Ok(Some(Experiment { id, name: name.to_owned(), description: row.get("description"), researcher: row.get("researcher"), required_variables: variables, autolog_runs: false, }))
             },
             _ => panic!("Found more than one experiment with the same name, but experiment names have to be unique!"),
         }
@@ -283,6 +297,7 @@ impl Experiment {
             description: row.get("description"),
             researcher: row.get("researcher"),
             required_variables: variables,
+            autolog_runs: false,
         })
     }
 
@@ -415,5 +430,15 @@ impl Experiment {
         }
 
         Ok(id)
+    }
+
+    fn log_run(variables: &HashMap<&Variable, String>, run_number: i32) {
+        info!("Run {run_number}:");
+
+        let mut table_builder = Builder::default();
+        table_builder.set_header(variables.iter().map(|(var, _)| var.template().name()));
+        table_builder.push_record(variables.iter().map(|(_, value)| value));
+        let table = table_builder.build();
+        info!("{table}");
     }
 }

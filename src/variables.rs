@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use anyhow::{bail, Context, Result};
 use postgres::{GenericClient, Row};
 
@@ -6,14 +8,18 @@ use crate::gen_unique_id;
 /// Template for a variable definition that is part of an experiment
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct VariableTemplate {
-    name: String,
-    description: String,
-    unit: String,
+    name: Cow<'static, str>,
+    description: Cow<'static, str>,
+    unit: Cow<'static, str>,
 }
 
 impl VariableTemplate {
     /// Creates a new template for a variable with the given name, description and unit
-    pub fn new(name: String, description: String, unit: String) -> Self {
+    pub const fn new(
+        name: Cow<'static, str>,
+        description: Cow<'static, str>,
+        unit: Cow<'static, str>,
+    ) -> Self {
         Self {
             name,
             description,
@@ -79,21 +85,21 @@ impl TryFrom<&'_ Row> for Variable {
 
     fn try_from(value: &'_ Row) -> std::result::Result<Self, Self::Error> {
         let id = value.try_get("id").context("id field not found in row")?;
-        let name = value
+        let name: String = value
             .try_get("name")
             .context("name field not found in row")?;
-        let description = value
+        let description: String = value
             .try_get("description")
             .context("description field not found in row")?;
-        let unit = value
+        let unit: String = value
             .try_get("unit")
             .context("unit field not found in row")?;
         Ok(Self {
             id,
             template: VariableTemplate {
-                name,
-                description,
-                unit,
+                name: name.into(),
+                description: description.into(),
+                unit: unit.into(),
             },
         })
     }

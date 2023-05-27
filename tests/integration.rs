@@ -50,6 +50,8 @@ fn showcase() -> Result<()> {
             // Track measured variables like so:
             context.add_value_by_name("Dataset", "Dataset 1");
             context.add_value_by_name("Runtime", 123);
+
+            Ok(())
         })
         .context("Failed to run experiment")?;
 
@@ -60,7 +62,13 @@ fn showcase() -> Result<()> {
 fn new_experiment_is_added_to_db() -> Result<()> {
     const NUM_VARIABLES: usize = 4;
     let variables = (0..NUM_VARIABLES)
-        .map(|_| VariableTemplate::new(random_string(16), random_string(32), random_string(8)))
+        .map(|_| {
+            VariableTemplate::new(
+                random_string(16).into(),
+                random_string(32).into(),
+                random_string(8).into(),
+            )
+        })
         .collect();
 
     let experiment = Experiment::new(
@@ -82,7 +90,13 @@ fn new_experiment_is_added_to_db() -> Result<()> {
 fn add_known_experiment() -> Result<()> {
     const NUM_VARIABLES: usize = 4;
     let variables: HashSet<_> = (0..NUM_VARIABLES)
-        .map(|_| VariableTemplate::new(random_string(16), random_string(32), random_string(8)))
+        .map(|_| {
+            VariableTemplate::new(
+                random_string(16).into(),
+                random_string(32).into(),
+                random_string(8).into(),
+            )
+        })
         .collect();
 
     let name = random_string(16);
@@ -118,7 +132,13 @@ fn add_known_experiment() -> Result<()> {
 fn new_experiment_run() -> Result<()> {
     const NUM_VARIABLES: usize = 4;
     let variables = (0..NUM_VARIABLES)
-        .map(|_| VariableTemplate::new(random_string(16), random_string(32), random_string(8)))
+        .map(|_| {
+            VariableTemplate::new(
+                random_string(16).into(),
+                random_string(32).into(),
+                random_string(8).into(),
+            )
+        })
         .collect();
 
     let experiment = Experiment::new(
@@ -139,6 +159,8 @@ fn new_experiment_run() -> Result<()> {
             for (variable, value) in &expected_measurements_for_run {
                 context.add_value_by_name(variable.template().name(), &value);
             }
+
+            Ok(())
         })
         .context("Experiment run failed")?;
 
