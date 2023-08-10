@@ -4,9 +4,9 @@ use std::{
     time::SystemTime,
 };
 
-use crate::{connect, gen_unique_id, Measurement, Variable, VariableTemplate};
+use crate::{connect, gen_unique_id, Measurement, RawRun, Run, Variable, VariableTemplate};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use log::info;
 use postgres::{Client, GenericClient};
 use tabled::builder::Builder;
@@ -72,15 +72,27 @@ impl Experiment {
             .context("Failed to check database for the existence of this experiment")?
         {
             // Known experiment. check that description and researcher still match, otherwise raise an error!
-            if experiment.description != description
-                || experiment.researcher != researcher
-                || experiment.required_variables.len() != required_variables.len()
-                || experiment
-                    .required_variables
-                    .iter()
-                    .any(|variable| !required_variables.contains(variable.template()))
+            if experiment.description != description {
+                bail!("Experiment data does not match data of known experiment in the DB! Expected description string {} but got description string {}. Either give the experiment a new unique name, or call `Experiment::override_existing` if you want to replace the experiment data with new data!", description, experiment.description);
+            }
+
+            if experiment.researcher != researcher {
+                bail!("Experiment data does not match data of known experiment in the DB! Expected researcher(s) {} but got researcher(s) {}. Either give the experiment a new unique name, or call `Experiment::override_existing` if you want to replace the experiment data with new data!", researcher, experiment.researcher);
+            }
+
+            let diff_variables = experiment
+                .required_variables
+                .iter()
+                .filter(|variable| {
+                    !required_variables.iter().any(|required_variable| {
+                        required_variable.name() == variable.template().name()
+                    })
+                })
+                .collect::<Vec<_>>();
+            if experiment.required_variables.len() != required_variables.len()
+                || !diff_variables.is_empty()
             {
-                bail!("Experiment data does not match data of known experiment in the DB! If this is a new experiment, either give it a unique name, or call `Experiment::override_existing` if you want to replace the experiment data with new data!");
+                bail!("Experiment data does not match data of known experiment in the DB! Found unexpected variables {:#?}. If this is a new experiment, either give it a unique name, or call `Experiment::override_existing` if you want to replace the experiment data with new data!", diff_variables);
             }
 
             Ok(experiment)
@@ -91,7 +103,17 @@ impl Experiment {
                 .context("Can't start database transaction")?;
             let variables = required_variables
                 .into_iter()
-                .map(|variable| variable.insert_into_db(&mut transaction))
+                .map(|variable| -> Result<Variable> {
+                    // Check if we have a matching variable in the DB!
+                    let matching_variable = variable
+                        .fetch_from_db(&mut transaction)
+                        .context("Failed to check database for existing variable")?;
+                    if let Some(variable) = matching_variable {
+                        Ok(variable)
+                    } else {
+                        variable.insert_into_db(&mut transaction)
+                    }
+                })
                 .collect::<Result<HashSet<_>, _>>()
                 .context("Inserting variables into database failed")?;
             let experiment_id = Self::insert_new_experiment_into_db(
@@ -124,7 +146,27 @@ impl Experiment {
         _researcher: String,
         _required_variables: HashSet<VariableTemplate>,
     ) -> Result<()> {
+        // TODO Instead of overriding, we could add support for versioning of experiments
         todo!()
+    }
+
+    /// Tries to fetch the experiment with the given name from the database
+    pub fn from_name(name: &str) -> Result<Option<Self>> {
+        let mut db_client =
+            crate::postgres::connect().context("Could not connect to postgres DB")?;
+        Self::get_experiment_from_db_by_name(name, &mut db_client)
+    }
+
+    /// Tries to fetch the experiment for the run with the given ID
+    pub fn from_run_id(run_id: &str) -> Result<Option<Self>> {
+        let mut db_client =
+            crate::postgres::connect().context("Could not connect to postgres DB")?;
+        let raw_run =
+            RawRun::from_id(run_id, &mut db_client).context("Failed to fetch run from DB")?;
+        match raw_run {
+            None => Ok(None),
+            Some(raw_run) => Self::get_experiment_from_db_by_raw_run(&raw_run, &mut db_client),
+        }
     }
 
     /// Runs this experiment. The code for the experiment is executed as an abstract function passed to this method.
@@ -202,6 +244,43 @@ impl Experiment {
             .collect()
     }
 
+    /// Fetch the data for all runs of this experiments
+    pub fn all_runs(&self) -> Result<Vec<Run<'_>>> {
+        let mut client = connect().context("Failed to connect to DB")?;
+
+        let all_runs = client
+            .query(
+                "SELECT id, runnumber FROM experiment_runs WHERE experimentid = $1",
+                &[&self.id],
+            )
+            .context("Failed to execute query")?;
+
+        all_runs
+            .into_iter()
+            .map(|row| {
+                let run_id = row.get(0);
+                let run_number = row.get::<_, i32>(1);
+                self.measurements_for_run(run_id).map(|measurements| {
+                    Run::new(run_id.to_string(), run_number as usize, measurements)
+                })
+            })
+            .collect()
+    }
+
+    pub fn run_from_id(&self, run_id: &str) -> Result<Option<Run<'_>>> {
+        let mut client = connect().context("Failed to connect to DB")?;
+        let raw_run =
+            RawRun::from_id(run_id, &mut client).context("Failed to fetch run from DB")?;
+        match raw_run {
+            None => Ok(None),
+            Some(raw_run) => {
+                let run =
+                    Run::from_raw_run(&raw_run, &self).context("Failed to fetch run from DB")?;
+                Ok(Some(run))
+            }
+        }
+    }
+
     /// Returns the name of this experiment
     pub fn name(&self) -> &str {
         &self.name
@@ -242,7 +321,10 @@ impl Experiment {
 
         experiment_ids
             .into_iter()
-            .map(|id| Self::get_experiment_from_db_by_id(id.get(0), &mut connection))
+            .map(|id| {
+                let id = id.get(0);
+                Self::get_experiment_from_db_by_id(id, &mut connection).and_then(|maybe_experiment| maybe_experiment.ok_or(anyhow!("Experiment with ID {} not found in database, even though the ID exists", id)))
+            })
             .collect()
     }
 
@@ -273,32 +355,41 @@ impl Experiment {
     fn get_experiment_from_db_by_id<C: GenericClient>(
         id: &str,
         client: &mut C,
-    ) -> Result<Experiment> {
+    ) -> Result<Option<Experiment>> {
         let rows = client
             .query("SELECT * FROM experiments WHERE id = $1", &[&id])
             .context("Failed to execute query")?;
 
-        if rows.len() != 1 {
-            bail!(
+        match rows.len() {
+            0 => Ok(None),
+            1 => {
+                let row = &rows[0];
+                let id: String = row.get("id");
+
+                let variables = Self::query_variables_for_experiment(&id, client)
+                    .context("Failed to query variables for experiment")?;
+
+                Ok(Some(Experiment {
+                    id,
+                    name: row.get("name"),
+                    description: row.get("description"),
+                    researcher: row.get("researcher"),
+                    required_variables: variables,
+                    autolog_runs: false,
+                }))
+            }
+            _ => bail!(
                 "Unexpected number of experiments for id {id}. Expected 1 result but got {}",
                 rows.len()
-            );
+            ),
         }
+    }
 
-        let row = &rows[0];
-        let id: String = row.get("id");
-
-        let variables = Self::query_variables_for_experiment(&id, client)
-            .context("Failed to query variables for experiment")?;
-
-        Ok(Experiment {
-            id,
-            name: row.get("name"),
-            description: row.get("description"),
-            researcher: row.get("researcher"),
-            required_variables: variables,
-            autolog_runs: false,
-        })
+    fn get_experiment_from_db_by_raw_run<C: GenericClient>(
+        raw_run: &RawRun,
+        client: &mut C,
+    ) -> Result<Option<Experiment>> {
+        Self::get_experiment_from_db_by_id(&raw_run.experiment_id, client)
     }
 
     fn query_variables_for_experiment<C: GenericClient>(

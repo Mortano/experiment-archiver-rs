@@ -59,6 +59,28 @@ impl VariableTemplate {
             template: self.clone(),
         })
     }
+
+    /// Tries to fetch the variable matching this template from the database. Might return `Ok(None)` if no variable
+    /// with this name exists.
+    pub(crate) fn fetch_from_db<C: GenericClient>(
+        &self,
+        client: &mut C,
+    ) -> Result<Option<Variable>> {
+        let rows = client
+            .query("SELECT * FROM variables WHERE name = $1", &[&self.name])
+            .context("Failed to execute query")?;
+        if rows.len() > 1 {
+            bail!("More than one variable with name {} found, this should be impossible. Make sure the database schema sets variable names as unique!", self.name);
+        }
+        if rows.len() == 0 {
+            return Ok(None);
+        }
+        let row = &rows[0];
+        Ok(Some(Variable {
+            id: row.get(0),
+            template: self.clone(),
+        }))
+    }
 }
 
 /// Variable definition after inserting into the DB or fetching from the DB
