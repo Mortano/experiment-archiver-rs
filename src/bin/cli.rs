@@ -5,7 +5,7 @@ use chrono::{Local, NaiveDateTime};
 use clap::{Parser, Subcommand};
 use experiment_archiver::Experiment;
 use serde::{Deserialize, Serialize};
-use tabled::{builder::Builder, Table, Tabled};
+use tabled::builder::Builder;
 
 #[derive(Parser)]
 #[command(name = "Experiment Archive CLI")]
@@ -20,10 +20,25 @@ struct Args {
 #[derive(Subcommand)]
 enum Commands {
     Configure {},
-    ListExperiments {},
-    ListRuns { experiment_name: String },
-    PrintRun { run_id: String },
-    PrintAllRuns { experiment_name: String },
+    ListExperiments {
+        #[arg(short, long, default_value_t = false)]
+        as_csv: bool,
+    },
+    ListRuns {
+        experiment_name: String,
+        #[arg(short, long, default_value_t = false)]
+        as_csv: bool,
+    },
+    PrintRun {
+        run_id: String,
+        #[arg(short, long, default_value_t = false)]
+        as_csv: bool,
+    },
+    PrintAllRuns {
+        experiment_name: String,
+        #[arg(short, long, default_value_t = false)]
+        as_csv: bool,
+    },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -143,44 +158,106 @@ fn configure() -> Result<()> {
     Ok(())
 }
 
-fn list_experiments() -> Result<()> {
-    let all_experiments = Experiment::all().context("Error while fetching experiments")?;
+struct GenericTable {
+    header: Vec<String>,
+    rows: Vec<Vec<String>>,
+}
 
-    #[derive(Tabled)]
-    struct TabledExperiment {
-        name: String,
-        researcher: String,
-        description_short: String,
-        variable_names: String,
+impl GenericTable {
+    fn write_pretty<W: Write>(&self, mut writer: W) -> Result<()> {
+        let mut table_builder = Builder::default();
+        table_builder.set_header(&self.header);
+
+        for row in &self.rows {
+            table_builder.push_record(row);
+        }
+
+        let table = table_builder.build();
+        write!(writer, "{table}")?;
+
+        Ok(())
     }
+
+    fn write_csv<W: Write>(&self, mut writer: W) -> Result<()> {
+        let cleanup_str_for_csv = |s: &String| -> String {
+            let must_be_quoted = s.contains(&['\n', '\r', ';']);
+            if !must_be_quoted {
+                s.to_owned()
+            } else {
+                format!("\"{s}\"")
+            }
+        };
+
+        let header = self
+            .header
+            .iter()
+            .map(cleanup_str_for_csv)
+            .collect::<Vec<_>>()
+            .join(";");
+        writeln!(writer, "{header}")?;
+        for (idx, row) in self.rows.iter().enumerate() {
+            let row = row
+                .iter()
+                .map(cleanup_str_for_csv)
+                .collect::<Vec<_>>()
+                .join(";");
+            if idx == self.rows.len() - 1 {
+                write!(writer, "{row}")?;
+            } else {
+                writeln!(writer, "{row}")?
+            }
+        }
+        Ok(())
+    }
+}
+
+fn list_experiments(as_csv: bool) -> Result<()> {
+    let all_experiments = Experiment::all().context("Error while fetching experiments")?;
 
     const MAX_DESCRIPTION_LENGTH: usize = 32;
 
-    let table = Table::new(all_experiments.iter().map(|ex| {
-        let description_short = if ex.description().len() > MAX_DESCRIPTION_LENGTH {
-            format!("{}...", &ex.description()[..MAX_DESCRIPTION_LENGTH])
-        } else {
-            ex.description().to_owned()
-        };
-        let variable_names = ex
-            .variables()
-            .map(|var| var.template().name())
-            .collect::<Vec<_>>()
-            .join(",");
-        TabledExperiment {
-            description_short,
-            name: ex.name().to_owned(),
-            researcher: ex.researcher().to_owned(),
-            variable_names,
-        }
-    }));
+    let header = vec![
+        "name".into(),
+        "researcher".into(),
+        "description".into(),
+        "variable_names".into(),
+    ];
 
-    print!("{table}");
+    let rows = all_experiments
+        .iter()
+        .map(|ex| {
+            let description_short = if ex.description().len() > MAX_DESCRIPTION_LENGTH {
+                format!("{}...", &ex.description()[..MAX_DESCRIPTION_LENGTH])
+            } else {
+                ex.description().to_owned()
+            };
+            let variable_names = ex
+                .variables()
+                .map(|var| var.template().name())
+                .collect::<Vec<_>>()
+                .join(",");
+
+            vec![
+                ex.name().to_owned(),
+                ex.researcher().to_owned(),
+                description_short,
+                variable_names,
+            ]
+        })
+        .collect();
+
+    let generic_table = GenericTable { header, rows };
+
+    if as_csv {
+        generic_table.write_csv(std::io::stdout())?;
+    } else {
+        generic_table.write_pretty(std::io::stdout())?;
+    }
 
     Ok(())
 }
 
-fn list_runs(experiment_name: &str) -> Result<()> {
+fn list_runs(experiment_name: &str, as_csv: bool) -> Result<()> {
     let experiment = Experiment::from_name(experiment_name)
         .context("Failed to query database for experiments")?;
     match experiment {
@@ -190,42 +267,55 @@ fn list_runs(experiment_name: &str) -> Result<()> {
                 .all_runs()
                 .context("Failed to get runs for experiment")?;
 
-            #[derive(Tabled)]
-            struct TabledRun {
-                run_number: usize,
-                run_id: String,
-                timestamp: String,
+            let header = vec![
+                "run_number".to_owned(),
+                "run_id".to_owned(),
+                "timestamp".to_owned(),
+            ];
+
+            let rows = all_runs
+                .iter()
+                .map(|run| {
+                    let timestamp = run
+                        .measurements()
+                        .first()
+                        .map(|measurement| {
+                            let time_since_epoch = measurement
+                                .timestamp()
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .expect("Failed to get time since epoch");
+
+                            NaiveDateTime::from_timestamp_millis(
+                                    time_since_epoch.as_millis() as i64
+                                )
+                                .map(|date_time| {
+                                    date_time.and_utc().with_timezone(&Local).to_string()
+                                })
+                                .unwrap_or("unknown".into())
+                        })
+                        .unwrap_or("unknown".into());
+                    vec![run.run_number().to_string(), run.id().to_owned(), timestamp]
+                })
+                .collect();
+
+            let generic_table = GenericTable { header, rows };
+            if as_csv {
+                generic_table.write_csv(std::io::stdout())?;
+            } else {
+                generic_table.write_pretty(std::io::stdout())?;
             }
-
-            let table = Table::new(all_runs.iter().map(|run| {
-                let timestamp = run
-                    .measurements()
-                    .first()
-                    .map(|measurement| {
-                        let time_since_epoch = measurement
-                            .timestamp()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .expect("Failed to get time since epoch");
-
-                        NaiveDateTime::from_timestamp_millis(time_since_epoch.as_millis() as i64)
-                            .map(|date_time| date_time.and_utc().with_timezone(&Local).to_string())
-                            .unwrap_or("unknown".into())
-                    })
-                    .unwrap_or("unknown".into());
-                TabledRun {
-                    run_number: run.run_number(),
-                    run_id: run.id().to_owned(),
-                    timestamp,
-                }
-            }));
-
-            print!("{table}");
         }
     }
     Ok(())
 }
 
-fn print_run(run_id: &str) -> Result<()> {
+/// Format a variable value for printing. This removes newlines and carriage returns from the string
+/// so that it can be written as a single line of a table or CSV file
+fn format_variable_value(value: &str) -> String {
+    value.replace("\n", "").replace("\r", "")
+}
+
+fn print_run(run_id: &str, as_csv: bool) -> Result<()> {
     let experiment = Experiment::from_run_id(run_id)
         .context("Failed to fetch experiment for run ID")?
         .ok_or(anyhow!("No experiment found for run ID"))?;
@@ -234,28 +324,33 @@ fn print_run(run_id: &str) -> Result<()> {
         .context("Failed to fetch run from DB")?
         .ok_or(anyhow!("No run found for run ID"))?;
 
-    let mut table_builder = Builder::default();
     let header = std::iter::once(String::from("run_number")).chain(
         run.measurements()
             .iter()
             .map(|measurement| measurement.variable().template().name().to_owned()),
     );
-    table_builder.set_header(header);
 
     let row = std::iter::once(run.run_number().to_string()).chain(
         run.measurements()
             .iter()
-            .map(|measurement| measurement.value().to_owned()),
+            .map(|measurement| format_variable_value(measurement.value())),
     );
-    table_builder.push_record(row);
 
-    let table = table_builder.build();
-    print!("{table}");
+    let generic_table = GenericTable {
+        header: header.collect(),
+        rows: vec![row.collect()],
+    };
+
+    if as_csv {
+        generic_table.write_csv(std::io::stdout())?;
+    } else {
+        generic_table.write_pretty(std::io::stdout())?;
+    }
 
     Ok(())
 }
 
-fn print_all_runs(experiment_name: &str) -> Result<()> {
+fn print_all_runs(experiment_name: &str, as_csv: bool) -> Result<()> {
     let experiment = Experiment::from_name(experiment_name)
         .context("Failed to query database for experiments")?;
     match experiment {
@@ -267,29 +362,35 @@ fn print_all_runs(experiment_name: &str) -> Result<()> {
 
             let expected_variables = experiment.variables().collect::<Vec<_>>();
 
-            let mut table_builder = Builder::default();
-            let header = std::iter::once(String::from("run_number")).chain(
-                expected_variables
-                    .iter()
-                    .map(|variable| variable.template().name().to_owned()),
-            );
-            table_builder.set_header(header);
+            let header = std::iter::once(String::from("run_number"))
+                .chain(
+                    expected_variables
+                        .iter()
+                        .map(|variable| variable.template().name().to_owned()),
+                )
+                .collect();
 
-            for run in all_runs {
-                let row = std::iter::once(run.run_number().to_string()).chain(
-                    expected_variables.iter().map(|variable| {
-                        run.measurements()
-                            .iter()
-                            .find(|measurement| measurement.variable() == *variable)
-                            .map(|measurement| measurement.value().to_owned())
-                            .unwrap_or("N/A".to_owned())
-                    }),
-                );
-                table_builder.push_record(row);
+            let rows = all_runs
+                .iter()
+                .map(|run| {
+                    std::iter::once(run.run_number().to_string())
+                        .chain(expected_variables.iter().map(|variable| {
+                            run.measurements()
+                                .iter()
+                                .find(|measurement| measurement.variable() == *variable)
+                                .map(|measurement| format_variable_value(measurement.value()))
+                                .unwrap_or("N/A".to_owned())
+                        }))
+                        .collect()
+                })
+                .collect();
+
+            let table = GenericTable { header, rows };
+            if as_csv {
+                table.write_csv(std::io::stdout())?;
+            } else {
+                table.write_pretty(std::io::stdout())?;
             }
-
-            let table = table_builder.build();
-            print!("{table}");
         }
     }
 
@@ -307,14 +408,21 @@ fn main() -> Result<()> {
         Commands::Configure {} => {
             configure().context("Error while configuring default parameters")?
         }
-        Commands::ListExperiments {} => list_experiments().context("Failed to list experiments")?,
-        Commands::ListRuns { experiment_name } => {
-            list_runs(&experiment_name).context("Failed to list runs for experiment")?
+        Commands::ListExperiments { as_csv } => {
+            list_experiments(*as_csv).context("Failed to list experiments")?
         }
-        Commands::PrintRun { run_id } => print_run(&run_id).context("Failed to print run")?,
-        Commands::PrintAllRuns { experiment_name } => {
-            print_all_runs(experiment_name).context("Failed to print all runs of experiment")?
+        Commands::ListRuns {
+            experiment_name,
+            as_csv,
+        } => list_runs(&experiment_name, *as_csv).context("Failed to list runs for experiment")?,
+        Commands::PrintRun { run_id, as_csv } => {
+            print_run(&run_id, *as_csv).context("Failed to print run")?
         }
+        Commands::PrintAllRuns {
+            experiment_name,
+            as_csv,
+        } => print_all_runs(experiment_name, *as_csv)
+            .context("Failed to print all runs of experiment")?,
     }
 
     Ok(())
