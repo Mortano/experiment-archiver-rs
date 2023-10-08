@@ -248,23 +248,46 @@ impl Experiment {
     pub fn all_runs(&self) -> Result<Vec<Run<'_>>> {
         let mut client = connect().context("Failed to connect to DB")?;
 
-        let all_runs = client
+        let all_measurements_for_runs = client
             .query(
-                "SELECT id, runnumber FROM experiment_runs WHERE experimentid = $1",
+                "SELECT experiment_runs.id, value, measurements.timestamp, runnumber, variableid FROM measurements INNER JOIN experiment_runs ON measurements.runid = experiment_runs.id WHERE experiment_runs.experimentid = $1",
                 &[&self.id],
             )
             .context("Failed to execute query")?;
 
-        all_runs
+        let mut measurements_per_run: HashMap<String, Vec<Measurement<'_>>> = Default::default();
+
+        for row in all_measurements_for_runs {
+            let run_id: &str = row.get("id");
+            let variable_id: &str = row.get("variableid");
+            let value: String = row.get("value");
+            let timestamp: SystemTime = row.get("timestamp");
+            let run_number: i32 = row.get("runnumber");
+
+            let variable = self
+                .required_variables
+                .iter()
+                .find(|variable| variable.id() == variable_id)
+                .ok_or(anyhow!("No matching variable found"))?;
+
+            let measurement = Measurement::new(variable, value, timestamp, run_number);
+
+            if let Some(measurements) = measurements_per_run.get_mut(run_id) {
+                measurements.push(measurement);
+            } else {
+                measurements_per_run.insert(run_id.to_string(), vec![measurement]);
+            }
+        }
+
+        let mut runs: Vec<Run<'_>> = measurements_per_run
             .into_iter()
-            .map(|row| {
-                let run_id = row.get(0);
-                let run_number = row.get::<_, i32>(1);
-                self.measurements_for_run(run_id).map(|measurements| {
-                    Run::new(run_id.to_string(), run_number as usize, measurements)
-                })
+            .map(|(run_id, measurements)| {
+                Run::new(run_id, measurements[0].run_number() as usize, measurements)
             })
-            .collect()
+            .collect();
+        runs.sort_by(|a, b| a.run_number().cmp(&b.run_number()));
+
+        Ok(runs)
     }
 
     pub fn run_from_id(&self, run_id: &str) -> Result<Option<Run<'_>>> {
@@ -310,6 +333,85 @@ impl Experiment {
     /// using the `log` crate. By default, autologging is disabled
     pub fn set_autolog_runs(&mut self, autolog_runs: bool) {
         self.autolog_runs = autolog_runs;
+    }
+
+    /// Deletes this experiment and all associated data from the database. This function is not undoable, so
+    /// be very careful when calling it!
+    pub fn delete_from_database(self) -> Result<()> {
+        let mut client = connect().context("Failed to connect to DB")?;
+
+        let mut transaction = client
+            .transaction()
+            .context("Failed to begin transaction")?;
+
+        // delete all measurements for the experiment
+        transaction
+            .execute(
+                "DELETE FROM measurements WHERE experimentid = $1;",
+                &[&self.id],
+            )
+            .context("Failed to delete measurements")?;
+
+        // delete all runs for the experiment
+        transaction
+            .execute(
+                "DELETE FROM experiment_runs WHERE experimentid = $1;",
+                &[&self.id],
+            )
+            .context("Failed to delete experiment runs")?;
+
+        // delete all experiment_variables entries
+        transaction
+            .execute(
+                "DELETE FROM experiment_variables WHERE experiment_id = $1;",
+                &[&self.id],
+            )
+            .context("Failed to delete experiment variables")?;
+
+        // Delete the experiment itself
+        transaction
+            .execute("DELETE FROM experiments WHERE id = $1;", &[&self.id])
+            .context("Failed to delete experiment")?;
+
+        transaction
+            .commit()
+            .context("Failed to commit transaction")?;
+
+        Ok(())
+    }
+
+    /// Delete all runs for this experiment that match the run numbers in `run_numbers`. Also deletes associated measurements
+    /// for these runs. This function is not undoable, so be very careful when calling it!
+    pub fn delete_runs_from_database(
+        &self,
+        run_numbers: impl Iterator<Item = usize>,
+    ) -> Result<()> {
+        let mut client = connect().context("Failed to connect to DB")?;
+
+        let matching_runs = run_numbers
+            .map(|run_number| {
+                RawRun::from_run_number_and_experiment(run_number, &self, &mut client).and_then(
+                    |maybe_run| {
+                        maybe_run.ok_or(anyhow!("No run found with run number {run_number}"))
+                    },
+                )
+            })
+            .collect::<Result<Vec<_>>>()
+            .context("Failed to collect matching runs")?;
+
+        let mut transaction = client
+            .transaction()
+            .context("Failed to begin transaction")?;
+
+        for run in matching_runs {
+            run.delete_from_database(&mut transaction)?;
+        }
+
+        transaction
+            .commit()
+            .context("Failed to commit transaction for deleting runs")?;
+
+        Ok(())
     }
 
     /// Fetches all experiments from the database

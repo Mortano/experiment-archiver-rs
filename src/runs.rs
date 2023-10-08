@@ -34,6 +34,45 @@ impl RawRun {
             ),
         }
     }
+
+    /// Try to fetch the run with the given run_number matching the given experiment
+    pub fn from_run_number_and_experiment<C: GenericClient>(
+        run_number: usize,
+        experiment: &Experiment,
+        client: &mut C,
+    ) -> Result<Option<Self>> {
+        let rows = client
+            .query(
+                "SELECT * FROM experiment_runs WHERE runnumber = $1 AND experimentid = $2",
+                &[&(run_number as i32), &experiment.id()],
+            )
+            .context("Failed to execute query")?;
+        match rows.len() {
+            0 => Ok(None),
+            1 => {
+                let run: Self = (&rows[0])
+                    .try_into()
+                    .context("Failed to convert DB response to RawRun structure")?;
+                Ok(Some(run))
+            }
+            _ => bail!(
+                "Unexpected number of runs for run number {run_number} and experiment ID {}. Expected 1 result but got {}",
+                experiment.id(),
+                rows.len()
+            ),
+        }
+    }
+
+    /// Deletes this run and all associated measurements from the database
+    pub(crate) fn delete_from_database<C: GenericClient>(self, client: &mut C) -> Result<()> {
+        client
+            .execute("DELETE FROM measurements WHERE runid = $1", &[&self.run_id])
+            .with_context(|| format!("Failed to delete measurements for run {}", self.run_id))?;
+        client
+            .execute("DELETE FROM experiment_runs WHERE id = $1", &[&self.run_id])
+            .with_context(|| format!("Failed to delete experiment run {}", self.run_id))?;
+        Ok(())
+    }
 }
 
 impl TryFrom<&'_ Row> for RawRun {

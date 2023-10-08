@@ -5,7 +5,10 @@ use chrono::{Local, NaiveDateTime};
 use clap::{Parser, Subcommand};
 use experiment_archiver::Experiment;
 use serde::{Deserialize, Serialize};
-use tabled::builder::Builder;
+use tabled::{
+    builder::Builder,
+    settings::{object::Rows, Modify, Style, Width},
+};
 
 #[derive(Parser)]
 #[command(name = "Experiment Archive CLI")]
@@ -38,6 +41,16 @@ enum Commands {
         experiment_name: String,
         #[arg(short, long, default_value_t = false)]
         as_csv: bool,
+    },
+    DeleteExperiment {
+        experiment_name: String,
+    },
+    DeleteRuns {
+        experiment_name: String,
+        #[arg(
+            help = "The ID(s) of all runs that should be deleted. Can be a single number (e.g. \"4\") to delete one run, a comma-separated list (e.g. \"1,2,4\") to delete multiple runs, or an inclusive range (e.g. \"1-6\") to delete a range of consecutive runs"
+        )]
+        run_numbers: String,
     },
 }
 
@@ -172,7 +185,14 @@ impl GenericTable {
             table_builder.push_record(row);
         }
 
-        let table = table_builder.build();
+        let mut table = table_builder.build();
+
+        // let (terminal_width, _) =
+        //     termion::terminal_size().context("Can't determine terminal size")?;
+        // table.with(Width::wrap(terminal_width as usize));
+        table.with(Modify::new(Rows::new(..)).with(Width::wrap(24)));
+        table.with(Style::modern());
+
         write!(writer, "{table}")?;
 
         Ok(())
@@ -180,7 +200,7 @@ impl GenericTable {
 
     fn write_csv<W: Write>(&self, mut writer: W) -> Result<()> {
         let cleanup_str_for_csv = |s: &String| -> String {
-            let must_be_quoted = s.contains(&['\n', '\r', ';']);
+            let must_be_quoted = s.contains(&['\n', '\r', ',']);
             if !must_be_quoted {
                 s.to_owned()
             } else {
@@ -193,14 +213,14 @@ impl GenericTable {
             .iter()
             .map(cleanup_str_for_csv)
             .collect::<Vec<_>>()
-            .join(";");
+            .join(",");
         writeln!(writer, "{header}")?;
         for (idx, row) in self.rows.iter().enumerate() {
             let row = row
                 .iter()
                 .map(cleanup_str_for_csv)
                 .collect::<Vec<_>>()
-                .join(";");
+                .join(",");
             if idx == self.rows.len() - 1 {
                 write!(writer, "{row}")?;
             } else {
@@ -360,7 +380,8 @@ fn print_all_runs(experiment_name: &str, as_csv: bool) -> Result<()> {
                 .all_runs()
                 .context("Failed to get runs for experiment")?;
 
-            let expected_variables = experiment.variables().collect::<Vec<_>>();
+            let mut expected_variables = experiment.variables().collect::<Vec<_>>();
+            expected_variables.sort_by(|a, b| a.template().name().cmp(b.template().name()));
 
             let header = std::iter::once(String::from("run_number"))
                 .chain(
@@ -377,7 +398,7 @@ fn print_all_runs(experiment_name: &str, as_csv: bool) -> Result<()> {
                         .chain(expected_variables.iter().map(|variable| {
                             run.measurements()
                                 .iter()
-                                .find(|measurement| measurement.variable() == *variable)
+                                .find(|measurement| measurement.variable().id() == variable.id())
                                 .map(|measurement| format_variable_value(measurement.value()))
                                 .unwrap_or("N/A".to_owned())
                         }))
@@ -393,6 +414,84 @@ fn print_all_runs(experiment_name: &str, as_csv: bool) -> Result<()> {
             }
         }
     }
+
+    Ok(())
+}
+
+fn delete_experiment(experiment_name: &str) -> Result<()> {
+    let experiment = Experiment::from_name(experiment_name)
+        .context("Failed to query database for experiments")?
+        .ok_or(anyhow!(
+            "No experiment with name \"{experiment_name}\" found"
+        ))?;
+
+    println!("Are you sure you want to delete all data for experiment \"{experiment_name}\"? This operation is not reversible! (y/n)");
+    let mut input = String::default();
+    std::io::stdin().read_line(&mut input)?;
+    if input.trim() != "y" {
+        return Ok(());
+    }
+
+    experiment.delete_from_database()?;
+
+    Ok(())
+}
+
+fn parse_run_numbers_to_vec(run_numbers: &str) -> Result<Vec<usize>> {
+    // Either `run_numbers` is a single number, or a list of numbers (which contains at least one comma), or
+    // a range of numbers (which contains exactly one dash)
+    if run_numbers.contains(',') {
+        let numbers = run_numbers.split(',');
+        numbers
+            .map(|number| {
+                number
+                    .parse::<usize>()
+                    .context("Could not parse run number")
+            })
+            .collect()
+    } else if run_numbers.contains('-') {
+        let split = run_numbers.split('-').collect::<Vec<_>>();
+        if split.len() != 2 {
+            bail!("Could not parse run numbers as range. Expected \"first-last\" but got {run_numbers} instead");
+        }
+        let first = split[0]
+            .parse::<usize>()
+            .context("Could not parse start value of run numbers range")?;
+        let last_inclusive = split[1]
+            .parse::<usize>()
+            .context("Could not parse end value of run numbers range")?;
+        if last_inclusive < first {
+            bail!("End value of run numbers range must be >= start value");
+        }
+        Ok((first..=last_inclusive).collect::<Vec<_>>())
+    } else {
+        let single_run = run_numbers
+            .parse::<usize>()
+            .context("Could not parse run number as unsigned integer")?;
+        Ok(vec![single_run])
+    }
+}
+
+fn delete_runs(experiment_name: &str, run_numbers: &str) -> Result<()> {
+    let run_numbers_vec =
+        parse_run_numbers_to_vec(run_numbers).context("Failed to parse run numbers")?;
+
+    let experiment = Experiment::from_name(experiment_name)
+        .context("Failed to query database for experiments")?
+        .ok_or(anyhow!(
+            "No experiment with name \"{experiment_name}\" found"
+        ))?;
+
+    println!("Are you sure you want to delete run(s) {run_numbers} for experiment \"{experiment_name}\"? This operation is not reversible! (y/n)");
+    let mut input = String::default();
+    std::io::stdin().read_line(&mut input)?;
+    if input.trim() != "y" {
+        return Ok(());
+    }
+
+    experiment
+        .delete_runs_from_database(run_numbers_vec.into_iter())
+        .context("Failed to delete runs")?;
 
     Ok(())
 }
@@ -423,7 +522,70 @@ fn main() -> Result<()> {
             as_csv,
         } => print_all_runs(experiment_name, *as_csv)
             .context("Failed to print all runs of experiment")?,
+        Commands::DeleteExperiment { experiment_name } => {
+            delete_experiment(&experiment_name).context("Failed to delete experiment")?
+        }
+        Commands::DeleteRuns {
+            experiment_name,
+            run_numbers,
+        } => delete_runs(&experiment_name, &run_numbers).context("Failed to delete runs")?,
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_run_numbers() {
+        // Nothing
+        assert!(parse_run_numbers_to_vec("").is_err());
+
+        // Parse single numbers
+        {
+            let res = parse_run_numbers_to_vec("1");
+            assert!(res.is_ok());
+            assert_eq!(vec![1], res.unwrap());
+        }
+        {
+            let res = parse_run_numbers_to_vec("123");
+            assert!(res.is_ok());
+            assert_eq!(vec![123], res.unwrap());
+        }
+
+        // Parse list of numbers
+        {
+            let res = parse_run_numbers_to_vec("1,3");
+            assert!(res.is_ok());
+            assert_eq!(vec![1, 3], res.unwrap());
+        }
+        {
+            let res = parse_run_numbers_to_vec("5,3,173");
+            assert!(res.is_ok());
+            assert_eq!(vec![5, 3, 173], res.unwrap());
+        }
+        assert!(parse_run_numbers_to_vec("1,").is_err());
+        assert!(parse_run_numbers_to_vec(",").is_err());
+
+        // Parse range of numbers
+        {
+            let res = parse_run_numbers_to_vec("1-3");
+            assert!(res.is_ok());
+            assert_eq!(vec![1, 2, 3], res.unwrap());
+        }
+        {
+            let res = parse_run_numbers_to_vec("1-1");
+            assert!(res.is_ok());
+            assert_eq!(vec![1], res.unwrap());
+        }
+        {
+            let res = parse_run_numbers_to_vec("9-11");
+            assert!(res.is_ok());
+            assert_eq!(vec![9, 10, 11], res.unwrap());
+        }
+        assert!(parse_run_numbers_to_vec("1-").is_err());
+        assert!(parse_run_numbers_to_vec("-").is_err());
+    }
 }

@@ -15,7 +15,7 @@ pub struct Measurement<'a> {
 }
 
 impl<'a> Measurement<'a> {
-    pub(crate) fn _new(
+    pub(crate) fn new(
         variable: &'a Variable,
         value: String,
         timestamp: SystemTime,

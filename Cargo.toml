@@ -19,6 +19,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs = "5.0"
 chrono = "0.4"
+itertools = "0.11.0"
+termion = "2.0"
 
 [[bin]]
 name = "phd-ex-cli"

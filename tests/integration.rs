@@ -182,3 +182,126 @@ fn new_experiment_run() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn delete_experiment() -> Result<()> {
+    // Create new experiment, add a run, then delete experiment and verify that everything was deleted
+    const NUM_VARIABLES: usize = 4;
+    let variables: HashSet<_> = (0..NUM_VARIABLES)
+        .map(|_| {
+            VariableTemplate::new(
+                random_string(16).into(),
+                random_string(32).into(),
+                random_string(8).into(),
+            )
+        })
+        .collect();
+
+    let name = random_string(16);
+    let description = random_string(32);
+    let researcher = random_string(16);
+
+    let experiment1 = Experiment::new(
+        name.clone(),
+        description.clone(),
+        researcher.clone(),
+        variables.clone(),
+    )
+    .context("Failed to create new Experiment")?;
+
+    let expected_measurements_for_run: HashMap<_, _> = experiment1
+        .variables()
+        .map(|variable| (variable.clone(), random_string(8)))
+        .collect();
+    experiment1
+        .run(|context| {
+            for (variable, value) in &expected_measurements_for_run {
+                context.add_value_by_name(variable.template().name(), &value);
+            }
+
+            Ok(())
+        })
+        .context("Experiment run failed")?;
+
+    experiment1
+        .delete_from_database()
+        .context("Deleting experiment failed")?;
+
+    assert_eq!(None, Experiment::from_name(&name)?);
+
+    // Creating new experiment with same parameters should yield a new experiment with zero runs
+    let same_experiment = Experiment::new(
+        name.clone(),
+        description.clone(),
+        researcher.clone(),
+        variables.clone(),
+    )
+    .context("Failed to create Experiment")?;
+    let runs = same_experiment
+        .all_runs()
+        .context("failed to get experiment runs")?;
+    assert!(runs.is_empty());
+
+    Ok(())
+}
+
+#[test]
+fn delete_runs() -> Result<()> {
+    const NUM_VARIABLES: usize = 4;
+    let variables: HashSet<_> = (0..NUM_VARIABLES)
+        .map(|_| {
+            VariableTemplate::new(
+                random_string(16).into(),
+                random_string(32).into(),
+                random_string(8).into(),
+            )
+        })
+        .collect();
+
+    let name = random_string(16);
+    let description = random_string(32);
+    let researcher = random_string(16);
+
+    let experiment1 = Experiment::new(
+        name.clone(),
+        description.clone(),
+        researcher.clone(),
+        variables.clone(),
+    )
+    .context("Failed to create new Experiment")?;
+
+    let expected_measurements_for_run: HashMap<_, _> = experiment1
+        .variables()
+        .map(|variable| (variable.clone(), random_string(8)))
+        .collect();
+
+    // Add a bunch of runs
+    const NUM_RUNS: usize = 12;
+    for _ in 0..NUM_RUNS {
+        experiment1
+            .run(|context| {
+                for (variable, value) in &expected_measurements_for_run {
+                    context.add_value_by_name(variable.template().name(), &value);
+                }
+
+                Ok(())
+            })
+            .context("Experiment run failed")?;
+    }
+
+    // Run numbers start at 1. Delete first run and verify that only this run was deleted
+    experiment1.delete_runs_from_database(1..2)?;
+    let expected_run_numbers = (2..=NUM_RUNS).collect::<Vec<_>>();
+    let actual_run_numbers = experiment1
+        .all_runs()?
+        .into_iter()
+        .map(|run| run.run_number())
+        .collect::<Vec<_>>();
+    assert_eq!(expected_run_numbers, actual_run_numbers);
+
+    // Delete all other runs. No runs should be remaining
+    experiment1.delete_runs_from_database(2..=NUM_RUNS)?;
+    assert!(experiment1.all_runs()?.is_empty());
+
+    Ok(())
+}
