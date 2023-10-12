@@ -1,0 +1,24 @@
+name: Test Experiment
+description: Describes this experiment
+researchers:
+- Prof. Dr. Dr. Manytitles
+- Dr. Poo R. Postdoc
+- Student McStudentface
+input_variables:
+- name: Dataset
+  description: The dataset used in this experiment
+  data_type: Label
+- name: Machine
+  description: The machine that the experiment is run on
+  data_type: Label
+- name: Number of threads
+  description: How many threads were used
+  data_type: Number
+- name: Note
+  description: A note attached to this experiment
+  data_type: Text
+output_variables:
+- name: Runtime
+  description: The runtime of the tested program
+  data_type: 
+    unit: ms

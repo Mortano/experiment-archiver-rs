@@ -5,8 +5,12 @@ POSTGRES_PASSWORD=2XWVhtvi
 POSTGRES_DB=experiment_base
 PORT=16378
 
+# cd to tests folder (parent of the location of this script)
+cd "${0%/*}" && cd ..
+TEST_DATA_DIR=$PWD/data
+
 # run postgres docker container and create database
-docker run -d --name phd-experiment-base-postgres-test -p $PORT:5432 -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD -e POSTGRES_DB=$POSTGRES_DB -v /Users/pbormann/dev/proj_int/phd-experiment-base/test_data:/docker-entrypoint-initdb.d/ postgres:latest
+docker run -d --name exar-postgres-test -p $PORT:5432 -e POSTGRES_PASSWORD=$POSTGRES_PASSWORD -e POSTGRES_DB=$POSTGRES_DB -v $TEST_DATA_DIR:/docker-entrypoint-initdb.d/ postgres:latest
 
 if [ $? -ne 0 ]; then
     echo "Failed to launch postgres docker container" && exit 1
@@ -27,4 +31,4 @@ export RUST_BACKTRACE=1
 cargo test --release --test integration
 
 # shutdown container
-docker rm -f phd-experiment-base-postgres-test
+docker rm -f exar-postgres-test

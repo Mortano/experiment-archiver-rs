@@ -1,27 +1,5 @@
-[package]
-name = "experiment-archiver"
-version = "0.1.0"
-edition = "2021"
-authors = ["Pascal Bormann <pascal@pascalbormann.de>"]
-description = "Library for storing data from experiment runs in a PostgreSQL database"
-readme = "README.md"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-postgres = "0.19.5"
-anyhow = "1"
-rand = "0.8.5"
-log = "0.4.17"
-tabled = "0.12.0"
-clap = { version = "4.0", features = ["derive"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-dirs = "5.0"
-chrono = "0.4"
-itertools = "0.11.0"
-termion = "2.0"
-
-[[bin]]
-name = "phd-ex-cli"
-path = "src/bin/cli.rs"
+[workspace]
+members = [
+    "exar",
+    "exar-cli",
+]
