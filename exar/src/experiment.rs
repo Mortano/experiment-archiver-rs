@@ -3,9 +3,9 @@ use std::{collections::HashSet, fmt::Display, io::Read};
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
-use crate::{database::db_connection, run::RunContext};
+use crate::{database::db_connection, run::RunContext, variable::GenericValue};
 
 use super::{
     run::ExperimentRun,
@@ -222,11 +222,19 @@ impl ExperimentVersion {
 
     /// Create an `ExperimentInstance` by fixing the input variables of this `ExperimentVersion` to the given values. An
     /// `ExperimentInstance` is required to perform actual measurements (by calling [`ExperimentInstance::run`])
-    pub fn make_instance<'a>(
+    pub fn make_instance<'a, 'b, I: IntoIterator<Item = (&'b str, GenericValue)>>(
         &'a self,
-        input_variable_values: Vec<VariableValue<'a>>,
+        input_variable_values: I,
     ) -> Result<ExperimentInstance<'a>> {
-        ExperimentInstance::from_experiment_version(self, input_variable_values)
+        let as_variable_values = input_variable_values
+            .into_iter()
+            .map(|(name, value)| -> Result<VariableValue<'a>> {
+                self.input_variable_by_name(name)
+                    .ok_or_else(|| anyhow!("No variable with name {name} found"))
+                    .map(|var| VariableValue::from_variable(var, value))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ExperimentInstance::from_experiment_version(self, as_variable_values)
     }
 }
 

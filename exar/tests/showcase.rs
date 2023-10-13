@@ -1,7 +1,7 @@
 use anyhow::Result;
 use exar::{
     experiment::ExperimentVersion,
-    variable::{DataType, GenericValue, Variable, VariableValue},
+    variable::{DataType, GenericValue, Variable},
 };
 
 #[test]
@@ -48,16 +48,16 @@ fn showcase() -> Result<()> {
         output_variables,
     )?;
 
-    let in_var_1 = experiment.input_variable_by_name("Variable 1").unwrap();
-    let in_var_2 = experiment.input_variable_by_name("Variable 2").unwrap();
-    let fixed_input_values = vec![
-        VariableValue::from_variable(in_var_1, GenericValue::String("Fixed value".to_string())),
-        VariableValue::from_variable(
-            in_var_2,
+    let instance = experiment.make_instance([
+        (
+            "Variable 1",
+            GenericValue::String("Fixed value".to_string()),
+        ),
+        (
+            "Variable 2",
             GenericValue::String("Another fixed value".to_string()),
         ),
-    ];
-    let instance = experiment.make_instance(fixed_input_values.into_iter().collect())?;
+    ])?;
 
     instance.run(|context| -> Result<()> {
         // execute some code...

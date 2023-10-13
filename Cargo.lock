@@ -337,6 +337,7 @@ dependencies = [
  "anyhow",
  "build_id",
  "chrono",
+ "clap",
  "itertools",
  "lazy_static",
  "log",

@@ -19,6 +19,9 @@ lazy_static = "1.4"
 build_id = "0.2.1"
 serde_yaml = { version = "0.9", optional = true }
 
+[dev-dependencies]
+clap = { version = "4.0", features = ["derive"] }
+
 [features]
 default = ["yaml"]
 yaml = ["serde_yaml"]

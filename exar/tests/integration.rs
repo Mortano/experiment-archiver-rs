@@ -4,9 +4,8 @@ use anyhow::{anyhow, Result};
 use exar::{
     database::db_connection,
     experiment::ExperimentVersion,
-    variable::{DataType, GenericValue, Variable, VariableValue},
+    variable::{DataType, GenericValue, Variable},
 };
-use itertools::Itertools;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
 
 fn random_string(length: usize) -> String {
@@ -154,13 +153,12 @@ fn experiment_instance() -> Result<()> {
 
     let fixed_variables = input_variables
         .iter()
-        .map(|var| VariableValue::from_variable(var, GenericValue::String(random_string(4))))
-        .collect_vec();
-    let instance = experiment_version.make_instance(fixed_variables.clone())?;
+        .map(|var| (var.name(), GenericValue::String(random_string(4))));
+    let instance = experiment_version.make_instance(fixed_variables)?;
 
     let db = db_connection();
     let instance_from_db = db
-        .fetch_specific_instance(&experiment_version, &fixed_variables)?
+        .fetch_instance_from_id(instance.id(), &experiment_version)?
         .expect("Specific experiment instance not found in database");
     assert_eq!(instance.id(), instance_from_db.id());
     assert_eq!(
@@ -200,9 +198,8 @@ fn run_experiment() -> Result<()> {
 
     let fixed_variables = input_variables
         .iter()
-        .map(|var| VariableValue::from_variable(var, GenericValue::String(random_string(4))))
-        .collect_vec();
-    let instance = experiment_version.make_instance(fixed_variables.clone())?;
+        .map(|var| (var.name(), GenericValue::String(random_string(4))));
+    let instance = experiment_version.make_instance(fixed_variables)?;
 
     let run = instance.run(|context| -> Result<()> {
         for out_var in &output_variables {
@@ -247,9 +244,8 @@ fn delete_experiment() -> Result<()> {
 
     let fixed_variables = input_variables
         .iter()
-        .map(|var| VariableValue::from_variable(var, GenericValue::String(random_string(4))))
-        .collect_vec();
-    let instance = experiment_version.make_instance(fixed_variables.clone())?;
+        .map(|var| (var.name(), GenericValue::String(random_string(4))));
+    let instance = experiment_version.make_instance(fixed_variables)?;
 
     instance.run(|context| -> Result<()> {
         for out_var in &output_variables {
