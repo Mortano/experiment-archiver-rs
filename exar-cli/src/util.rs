@@ -60,6 +60,23 @@ pub fn options_list<S1: AsRef<str>, S2: AsRef<str>>(header: S1, options: &[S2]) 
     Ok(selected_idx - 1)
 }
 
+#[derive(Debug, Serialize)]
+pub struct SerializableVariable {
+    pub name: String,
+    pub description: String,
+    pub data_type: String,
+}
+
+impl From<&Variable> for SerializableVariable {
+    fn from(value: &Variable) -> Self {
+        Self {
+            data_type: value.data_type().to_string(),
+            description: value.description().to_string(),
+            name: value.name().to_string(),
+        }
+    }
+}
+
 /// A serializable version of a `VariableValue`
 #[derive(Debug, Serialize)]
 pub struct SerializableVariableValue {

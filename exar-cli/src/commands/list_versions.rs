@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use crate::{
     generic_table::GenericTable,
-    util::{print_serializable_as_json, print_serializable_as_yaml},
+    util::{print_serializable_as_json, print_serializable_as_yaml, SerializableVariable},
     OutputFormat,
 };
 use anyhow::{bail, Context, Result};
@@ -18,8 +18,8 @@ struct SerializableExperimentVersion {
     date: String,
     description: String,
     researchers: HashSet<String>,
-    input_variables: Vec<String>,
-    output_variables: Vec<String>,
+    input_variables: Vec<SerializableVariable>,
+    output_variables: Vec<SerializableVariable>,
 }
 
 impl From<&ExperimentVersion> for SerializableExperimentVersion {
@@ -28,17 +28,9 @@ impl From<&ExperimentVersion> for SerializableExperimentVersion {
             date: value.date().to_string(),
             description: value.description().to_string(),
             id: value.id().to_string(),
-            input_variables: value
-                .input_variables()
-                .iter()
-                .map(|v| v.to_string())
-                .collect(),
+            input_variables: value.input_variables().iter().map(|v| v.into()).collect(),
             name: value.name().to_string(),
-            output_variables: value
-                .output_variables()
-                .iter()
-                .map(|v| v.to_string())
-                .collect(),
+            output_variables: value.output_variables().iter().map(|v| v.into()).collect(),
             researchers: value.researchers().clone(),
             version: value.version().to_string(),
         }
@@ -95,6 +87,8 @@ pub fn list_versions(experiment_name_or_id: &str, output_format: OutputFormat) -
 fn to_generic_table(versions: &[ExperimentVersion]) -> GenericTable {
     let header = vec![
         "ID".to_string(),
+        "Name".to_string(),
+        "Version".to_string(),
         "Date".to_string(),
         "Description".to_string(),
         "Researchers".to_string(),
@@ -106,6 +100,8 @@ fn to_generic_table(versions: &[ExperimentVersion]) -> GenericTable {
     for version in versions {
         rows.push(vec![
             version.id().to_string(),
+            version.name().to_string(),
+            version.version().to_string(),
             version.date().to_string(),
             version.description().to_string(),
             version.researchers().iter().join(";"),

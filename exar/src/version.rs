@@ -5,10 +5,11 @@
 pub(crate) fn current_version() -> String {
     // Without access to git commit hashes, we use a unique ID of the current build
     let id = build_id::get();
-    id.to_string()
+    format!("Build ID {}", id.to_string())
 }
 
 #[cfg(feature = "version-from-git")]
 pub(crate) fn current_version() -> String {
-    todo!()
+    let hash = env!("GIT_HASH");
+    format!("git commit hash {hash}")
 }

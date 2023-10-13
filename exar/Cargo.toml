@@ -25,3 +25,4 @@ clap = { version = "4.0", features = ["derive"] }
 [features]
 default = ["yaml"]
 yaml = ["serde_yaml"]
+version-from-git = []
