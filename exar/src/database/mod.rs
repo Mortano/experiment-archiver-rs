@@ -29,11 +29,22 @@ pub trait Database: Sync + Send {
         name: &str,
         version: &str,
     ) -> Result<Option<ExperimentVersion>>;
+    fn fetch_experiment_version_by_id(&self, version_id: &str)
+        -> Result<Option<ExperimentVersion>>;
+    fn fetch_experiment_version_from_instance_id(
+        &self,
+        instance_id: &str,
+    ) -> Result<Option<ExperimentVersion>>;
 
     fn fetch_all_instances_of_experiment_version<'a>(
         &self,
         experiment_version: &'a ExperimentVersion,
     ) -> Result<Vec<ExperimentInstance<'a>>>;
+    fn fetch_instance_from_id<'a>(
+        &self,
+        instance_id: &str,
+        experiment_version: &'a ExperimentVersion,
+    ) -> Result<Option<ExperimentInstance<'a>>>;
     fn fetch_specific_instance<'a>(
         &self,
         experiment_version: &'a ExperimentVersion,

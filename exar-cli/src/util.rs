@@ -1,6 +1,8 @@
 use std::io::Write;
 
 use anyhow::{bail, Context, Result};
+use exar::variable::VariableValue;
+use serde::Serialize;
 
 /// Read a string from the command line by prompting the user with the given `prompt`
 pub fn read_string_with_prompt<S: AsRef<str>>(prompt: S) -> Result<String> {
@@ -56,4 +58,32 @@ pub fn options_list<S1: AsRef<str>, S2: AsRef<str>>(header: S1, options: &[S2]) 
         );
     }
     Ok(selected_idx - 1)
+}
+
+/// A serializable version of a `VariableValue`
+#[derive(Debug, Serialize)]
+pub struct SerializableVariableValue {
+    pub name: String,
+    pub value: String,
+}
+
+impl From<&VariableValue<'_>> for SerializableVariableValue {
+    fn from(value: &VariableValue<'_>) -> Self {
+        Self {
+            name: value.variable().name().to_string(),
+            value: value.value().to_string(),
+        }
+    }
+}
+
+pub fn print_serializable_as_json<S: Serialize>(serializables: &[S]) -> Result<()> {
+    let json = serde_json::to_string(serializables)?;
+    print!("{json}");
+    Ok(())
+}
+
+pub fn print_serializable_as_yaml<S: Serialize>(serializables: &[S]) -> Result<()> {
+    let yaml = serde_yaml::to_string(serializables)?;
+    print!("{yaml}");
+    Ok(())
 }

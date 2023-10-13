@@ -1,5 +1,6 @@
 mod commands;
 mod configuration;
+pub mod generic_table;
 pub mod util;
 
 use std::fmt::Display;
@@ -7,7 +8,8 @@ use std::fmt::Display;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use commands::{
-    configure::configure, list_experiments::list_experiments, list_versions::list_versions,
+    configure::configure, list_experiments::list_experiments, list_instances::list_instances,
+    list_runs::list_runs, list_versions::list_versions,
 };
 
 use crate::{commands::configure::initial_configuration, configuration::Configuration};
@@ -125,6 +127,10 @@ fn main() -> Result<()> {
         Commands::Configure => configure(),
         Commands::ListExperiments { format } => list_experiments(format),
         Commands::ListVersions { name_or_id, format } => list_versions(&name_or_id, format),
-        _ => unimplemented!(),
+        Commands::ListInstances { version_id, format } => list_instances(&version_id, format),
+        Commands::ListRuns {
+            instance_id,
+            format,
+        } => list_runs(&instance_id, format),
     }
 }

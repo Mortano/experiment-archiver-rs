@@ -15,7 +15,7 @@ use super::{
     version::current_version,
 };
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct ExperimentVersion {
     id: String,
     name: String,

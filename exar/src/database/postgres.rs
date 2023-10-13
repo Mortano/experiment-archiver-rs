@@ -1,6 +1,6 @@
 use std::{collections::HashSet, ops::Range, sync::Mutex};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
 use itertools::Itertools;
 use postgres::{Client, Config, NoTls, Row, Transaction};
@@ -384,6 +384,77 @@ impl Database for PostgresClient {
         Ok(specific_version)
     }
 
+    fn fetch_experiment_version_by_id(
+        &self,
+        version_id: &str,
+    ) -> Result<Option<ExperimentVersion>> {
+        let mut client = self.client.lock().expect("Lock was poisoned");
+        let rows = client
+            .query(
+                "SELECT experiments.name, description, researchers, version, date
+                        FROM experiment_versions 
+                        INNER JOIN experiments 
+                        ON experiment_versions.name = experiments.name 
+                        WHERE experiment_versions.id = $1",
+                &[&version_id],
+            )
+            .context("Failed to execute SQL query")?;
+
+        match rows.len() {
+            0 => Ok(None),
+            1 => {
+                let row = &rows[0];
+                let experiment_name: String = row.get("name");
+                let experiment_version: String = row.get("version");
+                let experiment_date = row.get("date");
+                let experiment_description = row.get("description");
+                let experiment_researchers_str: &str = row.get("researchers");
+                let experiment_researchers = experiment_researchers_str.split(";").map(|s| s.to_string()).collect();
+
+                // Fetch all variables that match the experiment
+                let variable_rows = client
+                    .query(
+                        "SELECT variables.name, variables.description, experiment_variables.kind, variables.type
+                                FROM variables 
+                                INNER JOIN experiment_variables 
+                                ON experiment_variables.var_name = variables.name 
+                                WHERE experiment_variables.ex_name = $1 AND experiment_variables.ex_version_id = $2",
+                        &[&experiment_name, &version_id],
+                    )
+                    .context("Failed to fetch variables")?;
+
+                let mut input_variables = HashSet::default();
+                let mut output_variables = HashSet::default();
+
+                for row in variable_rows {
+                    let var: Variable = (&row).try_into().with_context(|| {
+                        format!("Failed to parse Variable from SQL row {row:?}")
+                    })?;
+                    let variable_type_str: &str = row.get("kind");
+                    let variable_type: VariableType = serde_json::from_str(variable_type_str).with_context(|| format!("Failed to parse VariableType from SQL value {variable_type_str}"))?;
+                    if variable_type == VariableType::Input {
+                        input_variables.insert(var);
+                    } else {
+                        output_variables.insert(var);
+                    }
+                }
+
+                let experiment_version = ExperimentVersion::from_experiment(
+                    version_id.to_string(),
+                    experiment_name,
+                    experiment_version,
+                    experiment_date,
+                    experiment_description,
+                    experiment_researchers,
+                    input_variables,
+                    output_variables,
+                );
+                Ok(Some(experiment_version))
+            }
+            _ => bail!("Found more than one ExperimentVersion with id {version_id}. This is a database error as version IDs must be unique!"),
+        }
+    }
+
     fn fetch_all_instances_of_experiment_version<'a>(
         &self,
         experiment_version: &'a ExperimentVersion,
@@ -424,6 +495,43 @@ impl Database for PostgresClient {
         }
 
         Ok(instances)
+    }
+
+    fn fetch_experiment_version_from_instance_id(
+        &self,
+        instance_id: &str,
+    ) -> Result<Option<ExperimentVersion>> {
+        // Determine the ID of the ExperimentVersion that the instance belongs to
+        let mut client = self.client.lock().expect("Lock was poisoned");
+        let rows = client.query("SELECT experiment_versions.id FROM experiment_instances INNER JOIN experiment_versions ON experiment_versions.id = experiment_instances.version_id WHERE experiment_instances.id = $1", &[&instance_id]).context("Failed to execute query")?;
+        drop(client);
+
+        match rows.len() {
+            0 => Ok(None),
+            1 => {
+                let version_id = rows[0].get("id");
+                self.fetch_experiment_version_by_id(version_id)
+            }
+            _ => bail!("Found more than one experiment version that matches the instance ID {instance_id}. This is a database error, as there should be a one-to-one correspondence between instances and experiment versions"),
+        }
+    }
+
+    fn fetch_instance_from_id<'a>(
+        &self,
+        instance_id: &str,
+        experiment_version: &'a ExperimentVersion,
+    ) -> Result<Option<ExperimentInstance<'a>>> {
+        let all_instances = self
+            .fetch_all_instances_of_experiment_version(experiment_version)
+            .with_context(|| {
+                format!(
+                    "Failed to fetch instances of experiment {} @ version {}",
+                    experiment_version.name(),
+                    experiment_version.version()
+                )
+            })?;
+        let matching_instance = all_instances.into_iter().find(|i| i.id() == instance_id);
+        Ok(matching_instance)
     }
 
     fn fetch_specific_instance<'a>(

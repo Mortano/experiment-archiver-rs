@@ -1,8 +1,49 @@
-use crate::OutputFormat;
+use std::collections::HashSet;
+
+use crate::{
+    generic_table::GenericTable,
+    util::{print_serializable_as_json, print_serializable_as_yaml},
+    OutputFormat,
+};
 use anyhow::{bail, Context, Result};
 use exar::{database::db_connection, experiment::ExperimentVersion};
 use itertools::Itertools;
-use tabled::{builder::Builder, settings::Style};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct SerializableExperimentVersion {
+    id: String,
+    name: String,
+    version: String,
+    date: String,
+    description: String,
+    researchers: HashSet<String>,
+    input_variables: Vec<String>,
+    output_variables: Vec<String>,
+}
+
+impl From<&ExperimentVersion> for SerializableExperimentVersion {
+    fn from(value: &ExperimentVersion) -> Self {
+        Self {
+            date: value.date().to_string(),
+            description: value.description().to_string(),
+            id: value.id().to_string(),
+            input_variables: value
+                .input_variables()
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
+            name: value.name().to_string(),
+            output_variables: value
+                .output_variables()
+                .iter()
+                .map(|v| v.to_string())
+                .collect(),
+            researchers: value.researchers().clone(),
+            version: value.version().to_string(),
+        }
+    }
+}
 
 /// For convenience, we can call `lsv` with either the full name of an experiment, or the ID of the experiment, which is
 /// just an ascending number printed by `lse`. This function tries to figure out which of the two options it is and returns
@@ -39,26 +80,31 @@ pub fn list_versions(experiment_name_or_id: &str, output_format: OutputFormat) -
 
     match output_format {
         OutputFormat::Table => print_versions_as_table(&versions),
-        _ => unimplemented!(),
-        // OutputFormat::CSV => print_experiments_as_csv(&experiment_names),
-        // OutputFormat::JSON => print_experiments_as_json(&experiment_names),
-        // OutputFormat::YAML => print_experiments_as_yaml(&experiment_names),
+        OutputFormat::CSV => print_versions_as_csv(&versions),
+        OutputFormat::JSON => {
+            let serializable = to_serializables(&versions);
+            print_serializable_as_json(&serializable)
+        }
+        OutputFormat::YAML => {
+            let serializable = to_serializables(&versions);
+            print_serializable_as_yaml(&serializable)
+        }
     }
 }
 
-fn print_versions_as_table(versions: &[ExperimentVersion]) -> Result<()> {
-    let mut table_builder = Builder::default();
-    table_builder.set_header([
-        "ID",
-        "Date",
-        "Description",
-        "Researchers",
-        "Input variables",
-        "Output variables",
-    ]);
+fn to_generic_table(versions: &[ExperimentVersion]) -> GenericTable {
+    let header = vec![
+        "ID".to_string(),
+        "Date".to_string(),
+        "Description".to_string(),
+        "Researchers".to_string(),
+        "Input variables".to_string(),
+        "Output variables".to_string(),
+    ];
 
+    let mut rows = vec![];
     for version in versions {
-        table_builder.push_record([
+        rows.push(vec![
             version.id().to_string(),
             version.date().to_string(),
             version.description().to_string(),
@@ -76,9 +122,19 @@ fn print_versions_as_table(versions: &[ExperimentVersion]) -> Result<()> {
         ]);
     }
 
-    let mut table = table_builder.build();
-    table.with(Style::modern());
+    GenericTable::new(header, rows)
+}
 
-    println!("{table}");
-    Ok(())
+fn to_serializables(versions: &[ExperimentVersion]) -> Vec<SerializableExperimentVersion> {
+    versions.iter().map(|e| e.into()).collect()
+}
+
+fn print_versions_as_table(versions: &[ExperimentVersion]) -> Result<()> {
+    let table = to_generic_table(versions);
+    table.write_pretty(std::io::stdout())
+}
+
+fn print_versions_as_csv(versions: &[ExperimentVersion]) -> Result<()> {
+    let table = to_generic_table(versions);
+    table.write_csv(std::io::stdout())
 }
