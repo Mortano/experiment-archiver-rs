@@ -1,7 +1,7 @@
 use std::io::Write;
 
 use anyhow::{bail, Context, Result};
-use exar::variable::VariableValue;
+use exar::variable::{DataType, Variable, VariableValue};
 use serde::Serialize;
 
 /// Read a string from the command line by prompting the user with the given `prompt`
@@ -86,4 +86,12 @@ pub fn print_serializable_as_yaml<S: Serialize>(serializables: &[S]) -> Result<(
     let yaml = serde_yaml::to_string(serializables)?;
     print!("{yaml}");
     Ok(())
+}
+
+/// Returns a string for displaying in a table that represents the given variable
+pub fn variable_to_table_display(variable: &Variable) -> String {
+    match variable.data_type() {
+        DataType::Unit(unit) => format!("{} ({unit})", variable.name()),
+        _ => variable.name().to_string(),
+    }
 }

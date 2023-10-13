@@ -1,6 +1,9 @@
 use crate::{
     generic_table::GenericTable,
-    util::{print_serializable_as_json, print_serializable_as_yaml, SerializableVariableValue},
+    util::{
+        print_serializable_as_json, print_serializable_as_yaml, variable_to_table_display,
+        SerializableVariableValue,
+    },
     OutputFormat,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -72,15 +75,19 @@ fn instances_to_generic_table(instances: &[ExperimentInstance<'_>]) -> GenericTa
     let mut sorted_variables = variables.iter().collect::<Vec<_>>();
     sorted_variables.sort_by(|a, b| a.name().cmp(b.name()));
 
-    let header = ["Name", "Version"]
+    let header = ["ID".to_string(), "Name".to_string(), "Version".to_string()]
         .into_iter()
-        .chain(sorted_variables.iter().map(|v| v.name()))
-        .map(|s| s.to_string())
+        .chain(
+            sorted_variables
+                .iter()
+                .map(|v| variable_to_table_display(*v)),
+        )
         .collect_vec();
     let rows = instances
         .iter()
         .map(|instance| -> Vec<String> {
             [
+                instance.id().to_string(),
                 instance.experiment_version().name().to_string(),
                 instance.experiment_version().version().to_string(),
             ]

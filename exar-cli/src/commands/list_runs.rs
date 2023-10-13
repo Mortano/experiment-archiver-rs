@@ -1,6 +1,9 @@
 use crate::{
     generic_table::GenericTable,
-    util::{print_serializable_as_json, print_serializable_as_yaml, SerializableVariableValue},
+    util::{
+        print_serializable_as_json, print_serializable_as_yaml, variable_to_table_display,
+        SerializableVariableValue,
+    },
     OutputFormat,
 };
 use anyhow::{anyhow, bail, Context, Result};
@@ -66,10 +69,13 @@ fn runs_to_table(runs: &[ExperimentRun<'_>]) -> GenericTable {
         .collect_vec();
     sorted_variables.sort_by(|a, b| a.name().cmp(b.name()));
 
-    let header = ["ID", "Date"]
+    let header = ["ID".to_string(), "Date".to_string()]
         .into_iter()
-        .chain(sorted_variables.iter().map(|v| v.name()))
-        .map(ToString::to_string)
+        .chain(
+            sorted_variables
+                .iter()
+                .map(|v| variable_to_table_display(*v)),
+        )
         .collect_vec();
     let rows = runs
         .iter()
