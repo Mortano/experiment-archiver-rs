@@ -104,17 +104,17 @@ fn to_generic_table(versions: &[ExperimentVersion]) -> GenericTable {
             version.version().to_string(),
             version.date().to_string(),
             version.description().to_string(),
-            version.researchers().iter().join(";"),
+            version.researchers().iter().join("\n"),
             version
                 .input_variables()
                 .iter()
-                .map(|v| v.to_string())
-                .join(";"),
+                .map(|v| v.name())
+                .join("\n"),
             version
                 .output_variables()
                 .iter()
-                .map(|v| v.to_string())
-                .join(";"),
+                .map(|v| v.name())
+                .join("\n"),
         ]);
     }
 

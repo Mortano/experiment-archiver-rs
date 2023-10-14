@@ -3,7 +3,7 @@ use std::io::Write;
 use anyhow::{Context, Result};
 use tabled::{
     builder::Builder,
-    settings::{Style, Width},
+    settings::{Settings, Style, Width},
 };
 
 pub struct GenericTable {
@@ -37,19 +37,15 @@ impl GenericTable {
         let mut table = table_builder.build();
         table.with(Style::modern());
 
-        let mut table_string = format!("{table}");
-        // Try to truncate the table if it is larger than the current terminal window
-        if let Some(index_of_first_newline) = table_string.find("\n") {
-            let header_line = &table_string[..index_of_first_newline];
-            let (terminal_width, _) =
-                termion::terminal_size().context("Can't determine terminal size")?;
-            if header_line.len() > terminal_width as usize {
-                table.with(Width::wrap(terminal_width as usize));
-                table_string = format!("{table}");
-            }
+        let (terminal_width, _) =
+            termion::terminal_size().context("Can't determine terminal size")?;
+        if table.total_width() > terminal_width as usize {
+            table.with(Settings::new(
+                Width::wrap(terminal_width as usize),
+                Width::increase(terminal_width as usize),
+            ));
         }
-
-        write!(writer, "{table_string}")?;
+        write!(writer, "{table}")?;
 
         Ok(())
     }
