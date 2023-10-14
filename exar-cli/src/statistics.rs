@@ -20,9 +20,15 @@ pub struct AggregatedStringValue {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AggregatedBoolValue {
+    pub probability: f64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub enum AggregatedMeasurement {
     Numeric(AggregatedNumericValue),
     String(AggregatedStringValue),
+    Bool(AggregatedBoolValue),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,6 +58,7 @@ impl RunStatistics {
                             AggregatedMeasurement::String(_) => {
                                 vec![name.to_string()]
                             }
+                            AggregatedMeasurement::Bool(_) => vec![format!("{name} probability")],
                         }
                     })
                     .flatten(),
@@ -84,6 +91,9 @@ impl RunStatistics {
                                     .map(|(string, count)| format!("{string}: {count}"))
                                     .join("\n");
                                 vec![combined_histogram]
+                            }
+                            AggregatedMeasurement::Bool(bool_aggregate) => {
+                                vec![bool_aggregate.probability.to_string()]
                             }
                         }
                     })
@@ -131,6 +141,12 @@ pub fn aggregate_runs(runs: &[ExperimentRun<'_>]) -> RunStatistics {
                         }
                     }
                     AggregatedMeasurement::String(AggregatedStringValue { histogram })
+                }
+                DataType::Bool => {
+                    let bools = values.map(|v| v.as_bool()).collect_vec();
+                    let probability =
+                        bools.iter().filter(|b| **b).count() as f64 / bools.len() as f64;
+                    AggregatedMeasurement::Bool(AggregatedBoolValue { probability })
                 }
             };
 

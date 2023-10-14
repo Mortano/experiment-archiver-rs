@@ -30,6 +30,8 @@ pub enum DataType {
     Label,
     /// A generic textual variable
     Text,
+    /// A boolean variable
+    Bool,
 }
 
 impl DataType {
@@ -38,6 +40,7 @@ impl DataType {
             "Number" => Ok(Self::Number),
             "Label" => Ok(Self::Label),
             "Text" => Ok(Self::Text),
+            "Bool" => Ok(Self::Bool),
             other => bail!("Invalid name {other} for DataType"),
         }
     }
@@ -52,6 +55,11 @@ impl DataType {
                 Ok(GenericValue::Numeric(as_float))
             }
             DataType::Label | DataType::Text => Ok(GenericValue::String(value.to_string())),
+            DataType::Bool => {
+                Ok(GenericValue::Bool(value.parse().with_context(|| {
+                    format!("Failed to parse value {value} as bool")
+                })?))
+            }
         }
     }
 }
@@ -63,6 +71,7 @@ impl Display for DataType {
             DataType::Number => write!(f, "Number"),
             DataType::Label => write!(f, "Label"),
             DataType::Text => write!(f, "Text"),
+            DataType::Bool => write!(f, "Bool"),
         }
     }
 }
@@ -100,11 +109,15 @@ impl Variable {
         match self.data_type {
             DataType::Unit(_) | DataType::Number => match generic_value {
                 GenericValue::Numeric(_) => true,
-                GenericValue::String(_) => false,
+                _ => false,
             },
             DataType::Label | DataType::Text => match generic_value {
-                GenericValue::Numeric(_) => false,
                 GenericValue::String(_) => true,
+                _ => false,
+            },
+            DataType::Bool => match generic_value {
+                GenericValue::Bool(_) => true,
+                _ => false,
             },
         }
     }
@@ -163,6 +176,7 @@ impl Display for Variable {
 pub enum GenericValue {
     Numeric(f64),
     String(String),
+    Bool(bool),
 }
 
 impl GenericValue {
@@ -179,6 +193,13 @@ impl GenericValue {
             _ => panic!("self is not of variant String"),
         }
     }
+
+    pub fn as_bool(&self) -> bool {
+        match self {
+            GenericValue::Bool(b) => *b,
+            _ => panic!("self is not of variant Bool"),
+        }
+    }
 }
 
 impl Display for GenericValue {
@@ -186,6 +207,7 @@ impl Display for GenericValue {
         match self {
             GenericValue::Numeric(number) => write!(f, "{number}"),
             GenericValue::String(str) => write!(f, "{str}"),
+            GenericValue::Bool(b) => write!(f, "{b}"),
         }
     }
 }

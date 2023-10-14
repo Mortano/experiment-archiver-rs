@@ -65,9 +65,15 @@ impl ExperimentVersion {
 
     #[cfg(feature = "yaml")]
     pub fn from_yaml<R: Read>(reader: R) -> Result<ExperimentVersion> {
-        use crate::util::yaml::YamlExt;
+        let yaml_str = std::io::read_to_string(reader)?;
+        Self::from_yaml_str(yaml_str)
+    }
 
-        let yaml_value: serde_yaml::Value = serde_yaml::from_reader(reader)?;
+    #[cfg(feature = "yaml")]
+    pub fn from_yaml_str<S: AsRef<str>>(yaml_str: S) -> Result<ExperimentVersion> {
+        use crate::util::yaml::YamlExt;
+        let yaml_value: serde_yaml::Value = serde_yaml::from_str(yaml_str.as_ref())?;
+
         let name = yaml_value.field_as_str("name")?;
         let description = yaml_value.field_as_str("description")?;
         let researchers = yaml_value.field_as_vec_str("researchers")?;
