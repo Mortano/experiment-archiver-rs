@@ -39,7 +39,7 @@ impl Display for MbwMethod {
 }
 
 const DEFAULT_BLOCK_SIZE: usize = 262144;
-const BYTES_IN_MIB: usize = 1024 * 1024;
+// const BYTES_IN_MIB: usize = 1024 * 1024;
 
 /// Copy `bytes_to_copy` using the given `method`
 fn mbw(bytes_to_copy: usize, method: MbwMethod) -> Duration {
@@ -140,18 +140,19 @@ fn main() -> Result<()> {
         // instance. A run is a set of measurements for all output variables belonging to a specific experiment instance. Since
         // we want some statistically significant results, we will run our benchmark multiple times and create some runs:
         const NUM_RUNS: usize = 10;
-        for run_number in 0..NUM_RUNS {
-            instance.run(|context| -> Result<()> {
+        for _ in 0..NUM_RUNS {
+            let run = instance.run(|context| -> Result<()> {
                 let duration = mbw(args.byte_count, method);
                 let throughput = args.byte_count as f64 / duration.as_secs_f64();
                 // Once we have our data, we record it using the `context` object:
                 context.add_measurement("Runtime", GenericValue::Numeric(duration.as_secs_f64()));
                 context.add_measurement("Throughput", GenericValue::Numeric(throughput));
-                // `exar` only logs data into a database but by default doesn't print anything to stdout, so we do so
-                // manually 
-                eprintln!("{run_number:4} Method: {method:16} Runtime: {:4.6}s Size: {:.3}MiB Throughput: {:6.3}MiB/s", duration.as_secs_f64(), args.byte_count as f64 / BYTES_IN_MIB as f64, throughput / BYTES_IN_MIB as f64);
                 Ok(())
             })?;
+            // `exar` only logs data into a database but by default doesn't print anything to stdout, but the `ExperimentRun`
+            // instance returned from `run` has all the information to print stuff manually:
+            eprintln!("{run}");
+            // eprintln!("{run_number:4} Method: {method:16} Runtime: {:4.6}s Size: {:.3}MiB Throughput: {:6.3}MiB/s", duration.as_secs_f64(), args.byte_count as f64 / BYTES_IN_MIB as f64, throughput / BYTES_IN_MIB as f64);
         }
     }
 

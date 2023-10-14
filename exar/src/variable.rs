@@ -222,3 +222,12 @@ impl<'a> VariableValue<'a> {
         &self.value
     }
 }
+
+impl Display for VariableValue<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.variable.data_type() {
+            DataType::Unit(unit) => write!(f, "{}: {}{}", self.variable.name(), self.value, unit),
+            _ => write!(f, "{}: {}", self.variable.name(), self.value),
+        }
+    }
+}

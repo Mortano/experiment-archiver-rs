@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Mutex};
+use std::{collections::HashSet, fmt::Display, sync::Mutex};
 
 use anyhow::{bail, Result};
 use chrono::{DateTime, Utc};
@@ -89,6 +89,19 @@ impl<'a> ExperimentRun<'a> {
             "input_variables": input_values,
             "measurements": measurements,
         })
+    }
+}
+
+impl Display for ExperimentRun<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let in_out_variable_values = self
+            .experiment_instance()
+            .input_variable_values()
+            .iter()
+            .chain(self.measurements().iter())
+            .map(|v| v.to_string())
+            .join(" ");
+        write!(f, "{} - {}", self.id, in_out_variable_values)
     }
 }
 
