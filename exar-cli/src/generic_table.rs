@@ -41,7 +41,7 @@ impl GenericTable {
             termion::terminal_size().context("Can't determine terminal size")?;
         if table.total_width() > terminal_width as usize {
             table.with(Settings::new(
-                Width::wrap(terminal_width as usize),
+                Width::wrap(terminal_width as usize).keep_words(),
                 Width::increase(terminal_width as usize),
             ));
         }

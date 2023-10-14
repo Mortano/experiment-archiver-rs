@@ -64,13 +64,17 @@ enum Commands {
     },
     #[command(name = "lsi")]
     ListInstances {
-        /// ID of the version to list all instances for, as shown by `lsv`
-        version_id: String,
+        /// ID of the version to list all instances for, as shown by `lsv`, or name of the experiment if the `--latest` flag
+        /// is set
+        version_id_or_name: String,
         #[arg(short, long, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
         /// Prints a statistical overview of the runs for each instance
         #[arg(short, long, default_value_t = false)]
         statistics: bool,
+        /// List instances for the latest version of the experiment
+        #[arg(short, long, default_value_t = false)]
+        latest: bool,
     },
     #[command(name = "lsr")]
     ListRuns {
@@ -135,10 +139,11 @@ fn main() -> Result<()> {
         Commands::ListExperiments { format } => list_experiments(format),
         Commands::ListVersions { name_or_id, format } => list_versions(&name_or_id, format),
         Commands::ListInstances {
-            version_id,
+            version_id_or_name,
             format,
             statistics,
-        } => list_instances(&version_id, format, statistics),
+            latest,
+        } => list_instances(&version_id_or_name, format, statistics, latest),
         Commands::ListRuns {
             instance_id,
             format,

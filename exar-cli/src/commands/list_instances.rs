@@ -38,18 +38,35 @@ impl From<&ExperimentInstance<'_>> for SerializableInstance {
 }
 
 pub fn list_instances(
-    version_id: &str,
+    version_id_or_name: &str,
     output_format: OutputFormat,
     statistics: bool,
+    latest: bool,
 ) -> Result<()> {
     let db = db_connection();
-    let version = db
-        .fetch_experiment_version_by_id(version_id)
-        .with_context(|| format!("Failed to fetch experiment version {version_id}"))?
-        .ok_or_else(|| anyhow!("No experiment version with ID {version_id} found"))?;
+    let version = if latest {
+        let all_versions = db
+            .fetch_all_experiment_versions_by_name(version_id_or_name)
+            .with_context(|| {
+                format!("Failed to fetch versions for experiment {version_id_or_name}")
+            })?;
+        all_versions
+            .into_iter()
+            .max_by(|a, b| a.date().cmp(b.date()))
+            .ok_or_else(|| anyhow!("No versions found for experiment {version_id_or_name}"))?
+    } else {
+        db.fetch_experiment_version_by_id(version_id_or_name)
+            .with_context(|| format!("Failed to fetch experiment version {version_id_or_name}"))?
+            .ok_or_else(|| anyhow!("No experiment version with ID {version_id_or_name} found"))?
+    };
     let instances = db
         .fetch_all_instances_of_experiment_version(&version)
-        .with_context(|| format!("Failed to fetch instances of experiment version {version_id}"))?;
+        .with_context(|| {
+            format!(
+                "Failed to fetch instances of experiment version {}",
+                version.id()
+            )
+        })?;
 
     if instances.is_empty() {
         bail!(
