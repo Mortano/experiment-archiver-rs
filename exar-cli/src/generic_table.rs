@@ -1,7 +1,10 @@
 use std::io::Write;
 
-use anyhow::Result;
-use tabled::{builder::Builder, settings::Style};
+use anyhow::{Context, Result};
+use tabled::{
+    builder::Builder,
+    settings::{Style, Width},
+};
 
 pub struct GenericTable {
     header: Vec<String>,
@@ -13,6 +16,16 @@ impl GenericTable {
         Self { header, rows }
     }
 
+    pub fn append(&mut self, mut other: GenericTable) {
+        if self.rows.len() != other.rows.len() {
+            panic!("Mismatched table row count. This table has {} rows but the other table has {} rows", self.rows.len(), other.rows.len());
+        }
+        self.header.append(&mut other.header);
+        for (self_row, other_row) in self.rows.iter_mut().zip(other.rows.iter_mut()) {
+            self_row.append(other_row);
+        }
+    }
+
     pub fn write_pretty<W: Write>(&self, mut writer: W) -> Result<()> {
         let mut table_builder = Builder::default();
         table_builder.set_header(&self.header);
@@ -22,14 +35,21 @@ impl GenericTable {
         }
 
         let mut table = table_builder.build();
-
-        // let (terminal_width, _) =
-        //     termion::terminal_size().context("Can't determine terminal size")?;
-        // table.with(Width::wrap(terminal_width as usize));
-        // table.with(Modify::new(Rows::new(..)).with(Width::wrap(24)));
         table.with(Style::modern());
 
-        write!(writer, "{table}")?;
+        let mut table_string = format!("{table}");
+        // Try to truncate the table if it is larger than the current terminal window
+        if let Some(index_of_first_newline) = table_string.find("\n") {
+            let header_line = &table_string[..index_of_first_newline];
+            let (terminal_width, _) =
+                termion::terminal_size().context("Can't determine terminal size")?;
+            if header_line.len() > terminal_width as usize {
+                table.with(Width::wrap(terminal_width as usize));
+                table_string = format!("{table}");
+            }
+        }
+
+        write!(writer, "{table_string}")?;
 
         Ok(())
     }

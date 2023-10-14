@@ -165,6 +165,22 @@ pub enum GenericValue {
     String(String),
 }
 
+impl GenericValue {
+    pub fn as_f64(&self) -> f64 {
+        match self {
+            GenericValue::Numeric(val) => *val,
+            _ => panic!("self is not of variant Numeric"),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            GenericValue::String(str) => str,
+            _ => panic!("self is not of variant String"),
+        }
+    }
+}
+
 impl Display for GenericValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

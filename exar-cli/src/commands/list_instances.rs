@@ -1,5 +1,6 @@
 use crate::{
     generic_table::GenericTable,
+    statistics::{aggregate_runs, RunStatistics},
     util::{
         print_serializable_as_json, print_serializable_as_yaml, variable_to_table_display,
         SerializableVariableValue,
@@ -36,7 +37,11 @@ impl From<&ExperimentInstance<'_>> for SerializableInstance {
     }
 }
 
-pub fn list_instances(version_id: &str, output_format: OutputFormat) -> Result<()> {
+pub fn list_instances(
+    version_id: &str,
+    output_format: OutputFormat,
+    statistics: bool,
+) -> Result<()> {
     let db = db_connection();
     let version = db
         .fetch_experiment_version_by_id(version_id)
@@ -54,18 +59,47 @@ pub fn list_instances(version_id: &str, output_format: OutputFormat) -> Result<(
         );
     }
 
-    match output_format {
-        OutputFormat::Table => print_instances_as_table(&instances),
-        OutputFormat::CSV => print_instances_as_csv(&instances),
-        OutputFormat::JSON => {
-            let serializable: Vec<SerializableInstance> =
-                instances.iter().map(|i| i.into()).collect_vec();
-            print_serializable_as_json(&serializable)
+    if statistics {
+        // Get all runs for each instance
+        let run_stats_per_instance = instances
+            .iter()
+            .map(|instance| -> Result<_> {
+                let runs = db.fetch_all_runs_of_instance(instance).with_context(|| {
+                    format!("Failed to fetch runs for instance {}", instance.id())
+                })?;
+                let stats = aggregate_runs(&runs);
+                Ok(stats)
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        match output_format {
+            OutputFormat::Table => {
+                print_instances_and_runs_as_table(&instances, &run_stats_per_instance)
+            }
+            OutputFormat::CSV => {
+                print_instances_and_runs_as_csv(&instances, &run_stats_per_instance)
+            }
+            OutputFormat::JSON => {
+                print_instances_and_runs_as_json(&instances, &run_stats_per_instance)
+            }
+            OutputFormat::YAML => {
+                print_instances_and_runs_as_yaml(&instances, &run_stats_per_instance)
+            }
         }
-        OutputFormat::YAML => {
-            let serializable: Vec<SerializableInstance> =
-                instances.iter().map(|i| i.into()).collect_vec();
-            print_serializable_as_yaml(&serializable)
+    } else {
+        match output_format {
+            OutputFormat::Table => print_instances_as_table(&instances),
+            OutputFormat::CSV => print_instances_as_csv(&instances),
+            OutputFormat::JSON => {
+                let serializable: Vec<SerializableInstance> =
+                    instances.iter().map(|i| i.into()).collect_vec();
+                print_serializable_as_json(&serializable)
+            }
+            OutputFormat::YAML => {
+                let serializable: Vec<SerializableInstance> =
+                    instances.iter().map(|i| i.into()).collect_vec();
+                print_serializable_as_yaml(&serializable)
+            }
         }
     }
 }
@@ -115,4 +149,75 @@ fn print_instances_as_table(instances: &[ExperimentInstance<'_>]) -> Result<()> 
 fn print_instances_as_csv(instances: &[ExperimentInstance<'_>]) -> Result<()> {
     let table = instances_to_generic_table(instances);
     table.write_csv(std::io::stdout())
+}
+
+fn instances_and_runs_to_table(
+    instances: &[ExperimentInstance<'_>],
+    run_stats: &[RunStatistics],
+) -> GenericTable {
+    let mut instance_table = instances_to_generic_table(instances);
+    let runs_table = GenericTable::new(
+        run_stats[0].table_header(),
+        run_stats.iter().map(|stats| stats.table_row()).collect(),
+    );
+    instance_table.append(runs_table);
+    instance_table
+}
+
+fn print_instances_and_runs_as_table(
+    instances: &[ExperimentInstance<'_>],
+    run_stats: &[RunStatistics],
+) -> Result<()> {
+    let table = instances_and_runs_to_table(instances, run_stats);
+    table.write_pretty(std::io::stdout())
+}
+
+fn print_instances_and_runs_as_csv(
+    instances: &[ExperimentInstance<'_>],
+    run_stats: &[RunStatistics],
+) -> Result<()> {
+    let table = instances_and_runs_to_table(instances, run_stats);
+    table.write_csv(std::io::stdout())
+}
+
+#[derive(Debug, Serialize)]
+struct SerializableInstanceAndRun {
+    instance_id: String,
+    input_values: Vec<SerializableVariableValue>,
+    statistics: RunStatistics,
+}
+
+fn instances_and_runs_as_serializables(
+    instances: &[ExperimentInstance<'_>],
+    run_stats: &[RunStatistics],
+) -> Vec<SerializableInstanceAndRun> {
+    instances
+        .iter()
+        .zip(run_stats.iter())
+        .map(|(instance, stats)| SerializableInstanceAndRun {
+            input_values: instance
+                .input_variable_values()
+                .iter()
+                .map(|v| v.into())
+                .collect(),
+            instance_id: instance.id().to_string(),
+            statistics: stats.clone(),
+        })
+        .collect_vec()
+}
+
+fn print_instances_and_runs_as_json(
+    instances: &[ExperimentInstance<'_>],
+    run_stats: &[RunStatistics],
+) -> Result<()> {
+    let serializables = instances_and_runs_as_serializables(instances, run_stats);
+    print_serializable_as_json(&serializables)
+}
+
+fn print_instances_and_runs_as_yaml(
+    instances: &[ExperimentInstance<'_>],
+    run_stats: &[RunStatistics],
+) -> Result<()> {
+    let serializables = instances_and_runs_as_serializables(instances, run_stats);
+    print_serializable_as_yaml(&serializables)
 }

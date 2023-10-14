@@ -1,6 +1,7 @@
 mod commands;
 mod configuration;
 pub mod generic_table;
+pub mod statistics;
 pub mod util;
 
 use std::fmt::Display;
@@ -67,6 +68,9 @@ enum Commands {
         version_id: String,
         #[arg(short, long, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
+        /// Prints a statistical overview of the runs for each instance
+        #[arg(short, long, default_value_t = false)]
+        statistics: bool,
     },
     #[command(name = "lsr")]
     ListRuns {
@@ -74,6 +78,9 @@ enum Commands {
         instance_id: String,
         #[arg(short, long, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
+        /// Instead of printing each individual run, print a statistical overview of all runs by combining numerical measurements
+        #[arg(short, long, default_value_t = false)]
+        statistics: bool,
         // TODO Time range filtering
     }, // ListRuns {
        //     experiment_name: String,
@@ -127,10 +134,15 @@ fn main() -> Result<()> {
         Commands::Configure => configure(),
         Commands::ListExperiments { format } => list_experiments(format),
         Commands::ListVersions { name_or_id, format } => list_versions(&name_or_id, format),
-        Commands::ListInstances { version_id, format } => list_instances(&version_id, format),
+        Commands::ListInstances {
+            version_id,
+            format,
+            statistics,
+        } => list_instances(&version_id, format, statistics),
         Commands::ListRuns {
             instance_id,
             format,
-        } => list_runs(&instance_id, format),
+            statistics,
+        } => list_runs(&instance_id, format, statistics),
     }
 }

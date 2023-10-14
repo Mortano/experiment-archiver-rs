@@ -1,5 +1,6 @@
 use crate::{
     generic_table::GenericTable,
+    statistics::{aggregate_runs, RunStatistics},
     util::{
         print_serializable_as_json, print_serializable_as_yaml, variable_to_table_display,
         SerializableVariableValue,
@@ -28,7 +29,7 @@ impl From<&ExperimentRun<'_>> for SerializableRun {
     }
 }
 
-pub fn list_runs(instance_id: &str, output_format: OutputFormat) -> Result<()> {
+pub fn list_runs(instance_id: &str, output_format: OutputFormat, statistics: bool) -> Result<()> {
     // TODO This is a bit more complicated than I would like...
     let db = db_connection();
     let version = db
@@ -53,11 +54,21 @@ pub fn list_runs(instance_id: &str, output_format: OutputFormat) -> Result<()> {
         );
     }
 
-    match output_format {
-        OutputFormat::Table => print_runs_as_table(&runs),
-        OutputFormat::CSV => print_runs_as_csv(&runs),
-        OutputFormat::JSON => print_runs_as_json(&runs),
-        OutputFormat::YAML => print_runs_as_yaml(&runs),
+    if statistics {
+        let stats = aggregate_runs(&runs);
+        match output_format {
+            OutputFormat::Table => print_statistics_as_table(stats),
+            OutputFormat::CSV => print_statistics_as_csv(stats),
+            OutputFormat::JSON => print_serializable_as_json(&[stats]),
+            OutputFormat::YAML => print_serializable_as_yaml(&[stats]),
+        }
+    } else {
+        match output_format {
+            OutputFormat::Table => print_runs_as_table(&runs),
+            OutputFormat::CSV => print_runs_as_csv(&runs),
+            OutputFormat::JSON => print_runs_as_json(&runs),
+            OutputFormat::YAML => print_runs_as_yaml(&runs),
+        }
     }
 }
 
@@ -115,4 +126,18 @@ fn print_runs_as_json(runs: &[ExperimentRun<'_>]) -> Result<()> {
 fn print_runs_as_yaml(runs: &[ExperimentRun<'_>]) -> Result<()> {
     let as_serializable: Vec<SerializableRun> = runs.iter().map(|r| r.into()).collect();
     print_serializable_as_yaml(&as_serializable)
+}
+
+fn statistics_to_table(stats: RunStatistics) -> GenericTable {
+    GenericTable::new(stats.table_header(), vec![stats.table_row()])
+}
+
+fn print_statistics_as_table(stats: RunStatistics) -> Result<()> {
+    let table = statistics_to_table(stats);
+    table.write_pretty(std::io::stdout())
+}
+
+fn print_statistics_as_csv(stats: RunStatistics) -> Result<()> {
+    let table = statistics_to_table(stats);
+    table.write_csv(std::io::stdout())
 }
