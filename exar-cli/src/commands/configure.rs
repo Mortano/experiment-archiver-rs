@@ -2,7 +2,10 @@ use std::io::Write;
 
 use crate::{
     configuration::{ConfigEntry, Configuration},
-    util::{options_list, read_bool_with_prompt, read_string_with_prompt},
+    util::{
+        options_list, read_bool_with_prompt, read_string_with_prompt,
+        read_string_with_prompt_and_default,
+    },
 };
 use anyhow::{bail, Context, Result};
 use rpassword::read_password;
@@ -28,7 +31,18 @@ fn create_new_configuration(as_new_default: bool) -> Result<ConfigEntry> {
 
     let db_name = read_string_with_prompt("Enter name of database containg `exar` data")?;
 
-    let config = ConfigEntry::new(user, password, host, port, db_name, as_new_default);
+    let schema_name =
+        read_string_with_prompt_and_default("Enter name of default schema", "public")?;
+
+    let config = ConfigEntry::new(
+        user,
+        password,
+        host,
+        port,
+        db_name,
+        schema_name,
+        as_new_default,
+    );
     Ok(config)
 }
 

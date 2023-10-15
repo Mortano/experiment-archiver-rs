@@ -13,19 +13,12 @@ use crate::{
 
 use super::Database;
 
-// Edge cases:
-// 1) What if a variable with the same name now has different types or descriptions?
-// 2) Could a variable that is an input variable in one experiment be an output variable in another? I think yes...
-//    Which means that we can't use the name as a PKEY for the variable, but instead have to use an ID or something...
-// 3) If we overwrite a version of an experiment (e.g. 'latest') with new variables, we must delete the old
-//    mappings. Probably best achieved by first deleting the old version and then adding the version anew
-// 4) Should variables have versioning as well?
-
 const ENV_PSQL_USER: &str = "PSQL_USER";
 const ENV_PSQL_PWD: &str = "PSQL_PWD";
 const ENV_PSQL_HOST: &str = "PSQL_HOST";
 const ENV_PSQL_PORT: &str = "PSQL_PORT";
 const ENV_PSQL_DBNAME: &str = "PSQL_DBNAME";
+const ENV_PSQL_DBSCHEMA: &str = "PSQL_DBSCHEMA";
 
 /// Returns connection config for postgres DB, fetched from environment variables
 pub(crate) fn get_postgres_config() -> Result<Config> {
@@ -65,10 +58,12 @@ pub(crate) fn get_postgres_config() -> Result<Config> {
 
 pub(crate) struct PostgresClient {
     client: Mutex<Client>,
+    schema: String,
 }
 
 impl PostgresClient {
     pub(crate) fn connect() -> Result<Self> {
+        let schema = std::env::var(ENV_PSQL_DBSCHEMA).unwrap_or("public".to_string());
         let config =
             get_postgres_config().context("Can't get connection configuration for postgres DB")?;
         let client = config.connect(NoTls).context(format!(
@@ -77,6 +72,7 @@ impl PostgresClient {
         ))?;
         Ok(Self {
             client: Mutex::new(client),
+            schema,
         })
     }
 
@@ -128,6 +124,7 @@ impl PostgresClient {
     // }
 
     fn add_new_experiment_version(
+        &self,
         experiment_version: &ExperimentVersion,
         transaction: &mut Transaction<'_>,
     ) -> Result<()> {
@@ -144,9 +141,12 @@ impl PostgresClient {
             let data_type = serde_json::to_string(&variable.data_type())?;
             transaction
                 .execute(
-                    "INSERT INTO variables (name, description, type) 
-                            VALUES ($1, $2, $3) 
-                            ON CONFLICT (name) DO NOTHING",
+                    &format!(
+                        "INSERT INTO {}.variables (name, description, type) 
+                        VALUES ($1, $2, $3) 
+                        ON CONFLICT (name) DO NOTHING",
+                        self.schema
+                    ),
                     &[&variable.name(), &variable.description(), &data_type],
                 )
                 .with_context(|| format!("Failed to insert variable {variable} into database"))?;
@@ -157,7 +157,9 @@ impl PostgresClient {
         let researchers_joined = experiment_version.researchers().iter().join(";");
         transaction
             .execute(
-                "INSERT INTO experiment_versions (id, name, version, date, description, researchers) VALUES ($1, $2, $3, $4, $5, $6)",
+                &format!(
+                    "INSERT INTO {}.experiment_versions (id, name, version, date, description, researchers) 
+                    VALUES ($1, $2, $3, $4, $5, $6)", self.schema),
                 &[
                     &experiment_version.id(),
                     &experiment_version.name(),
@@ -188,41 +190,61 @@ impl PostgresClient {
         {
             let kind_json = serde_json::to_string(&kind)?;
             // If we already have a link between the experiment version and the variable, leave it
-            transaction.execute("INSERT INTO experiment_variables (var_name, ex_name, ex_version_id, kind) VALUES ($1, $2, $3, $4) ON CONFLICT (var_name, ex_version_id) DO NOTHING", &[
-                &variable.name(),
-                &experiment_version.name(),
-                &experiment_version.id(),
-                &kind_json,
-            ]).with_context(|| format!("Failed to link variable {} to experiment {} at version {}", variable.name(), experiment_version.name(), experiment_version.version()))?;
+            transaction
+                .execute(
+                    &format!(
+                "INSERT INTO {}.experiment_variables (var_name, ex_name, ex_version_id, kind) 
+                VALUES ($1, $2, $3, $4) 
+                ON CONFLICT (var_name, ex_version_id) 
+                DO NOTHING", self.schema),
+                    &[
+                        &variable.name(),
+                        &experiment_version.name(),
+                        &experiment_version.id(),
+                        &kind_json,
+                    ],
+                )
+                .with_context(|| {
+                    format!(
+                        "Failed to link variable {} to experiment {} at version {}",
+                        variable.name(),
+                        experiment_version.name(),
+                        experiment_version.version()
+                    )
+                })?;
         }
 
         Ok(())
     }
 
     fn delete_experiment_version(
+        &self,
         experiment_version_id: &str,
         transaction: &mut Transaction<'_>,
     ) -> Result<()> {
         // Remove variable links
-        transaction.execute("DELETE FROM experiment_variables WHERE ex_version_id = $1", &[&experiment_version_id]).with_context(|| format!("Failed to unlink variables from old experiment version {experiment_version_id}"))?;
+        transaction.execute(&format!("DELETE FROM {}.experiment_variables WHERE ex_version_id = $1", self.schema), &[&experiment_version_id]).with_context(|| format!("Failed to unlink variables from old experiment version {experiment_version_id}"))?;
 
         // Remove all existing ExperimentInstances for the old version, which means:
         // 1) Deleting all measurements for runs for instances that belong to this version
-        transaction.execute("DELETE FROM measurements M 
-        USING runs R, experiment_instances I 
-        WHERE M.run_id = R.id AND R.ex_instance_id = I.id AND I.version_id = $1", &[&experiment_version_id]).with_context(|| format!("Failed to delete measurements for old experiment version {experiment_version_id}"))?;
+        transaction.execute(&format!("DELETE FROM {0}.measurements M 
+        USING {0}.runs R, {0}.experiment_instances I 
+        WHERE M.run_id = R.id AND R.ex_instance_id = I.id AND I.version_id = $1", self.schema), &[&experiment_version_id]).with_context(|| format!("Failed to delete measurements for old experiment version {experiment_version_id}"))?;
         // 2) Deleting all runs for instances that belong to this version
-        transaction.execute("DELETE FROM runs R 
-        USING experiment_instances I 
-        WHERE R.ex_instance_id = I.id AND I.version_id = $1", &[&experiment_version_id]).with_context(|| format!("Failed to delete runs for instances of old experiment version {experiment_version_id}"))?;
+        transaction.execute(&format!("DELETE FROM {0}.runs R 
+        USING {0}.experiment_instances I 
+        WHERE R.ex_instance_id = I.id AND I.version_id = $1", self.schema), &[&experiment_version_id]).with_context(|| format!("Failed to delete runs for instances of old experiment version {experiment_version_id}"))?;
         // 3) Deleting all in_values for instances that belong to this version
-        transaction.execute("DELETE FROM in_values V
-        USING experiment_instances I 
-        WHERE V.ex_instance_id = I.id AND I.version_id = $1", &[&experiment_version_id]).with_context(|| format!("Failed to delete in_values for instances of old experiment version {experiment_version_id}"))?;
+        transaction.execute(&format!("DELETE FROM {}.in_values V
+        USING {0}.experiment_instances I 
+        WHERE V.ex_instance_id = I.id AND I.version_id = $1", self.schema), &[&experiment_version_id]).with_context(|| format!("Failed to delete in_values for instances of old experiment version {experiment_version_id}"))?;
         // 4) Deleting all instances that belong to this version
         transaction
             .execute(
-                "DELETE FROM experiment_instances WHERE version_id = $1",
+                &format!(
+                    "DELETE FROM {}.experiment_instances WHERE version_id = $1",
+                    self.schema
+                ),
                 &[&experiment_version_id],
             )
             .with_context(|| {
@@ -234,7 +256,10 @@ impl PostgresClient {
         // Delete the actual ExperimentVersion
         transaction
             .execute(
-                "DELETE FROM experiment_versions WHERE id = $1",
+                &format!(
+                    "DELETE FROM {}.experiment_versions WHERE id = $1",
+                    self.schema
+                ),
                 &[&experiment_version_id],
             )
             .with_context(|| {
@@ -245,38 +270,52 @@ impl PostgresClient {
     }
 
     fn delete_experiment_instance(
+        &self,
         instance_id: &str,
         transaction: &mut Transaction<'_>,
     ) -> Result<()> {
         // 1) Deleting all measurements for runs that belong to this instance
         transaction
             .execute(
-                "DELETE FROM measurements M 
-        USING runs R
-        WHERE M.run_id = R.id AND R.ex_instance_id = $1",
+                &format!(
+                    "DELETE FROM {0}.measurements M 
+                    USING {0}.runs R
+                    WHERE M.run_id = R.id AND R.ex_instance_id = $1",
+                    self.schema
+                ),
                 &[&instance_id],
             )
             .with_context(|| format!("Failed to delete measurements for instance {instance_id}"))?;
         // 2) Deleting all runs that belong to this instance
         transaction
             .execute(
-                "DELETE FROM runs R 
-        WHERE R.ex_instance_id = $1",
+                &format!(
+                    "DELETE FROM {}.runs R 
+                    WHERE R.ex_instance_id = $1",
+                    self.schema
+                ),
                 &[&instance_id],
             )
             .with_context(|| format!("Failed to delete runs for instance {instance_id}"))?;
         // 3) Deleting all in_values for this instance
         transaction
             .execute(
-                "DELETE FROM in_values V
-        WHERE V.ex_instance_id = $1",
+                &format!(
+                    "DELETE FROM {}.in_values V
+                    WHERE V.ex_instance_id = $1",
+                    self.schema
+                ),
                 &[&instance_id],
             )
             .with_context(|| format!("Failed to delete in_values for instance {instance_id}"))?;
         // 4) Delete the actual instance
         transaction
             .execute(
-                "DELETE FROM experiment_instances WHERE id = $1",
+                &format!(
+                    "DELETE FROM {}.experiment_instances 
+                    WHERE id = $1",
+                    self.schema
+                ),
                 &[&instance_id],
             )
             .with_context(|| format!("Failed to delete experiment instance {instance_id}"))?;
@@ -288,7 +327,10 @@ impl Database for PostgresClient {
     fn fetch_experiments(&self) -> Result<Vec<String>> {
         let mut client = self.client.lock().expect("Lock was poisoned");
         let rows = client
-            .query("SELECT name FROM experiments", &[])
+            .query(
+                &format!("SELECT name FROM {}.experiments", self.schema),
+                &[],
+            )
             .context("Failed to execute SQL query")?;
 
         Ok(rows
@@ -314,11 +356,14 @@ impl Database for PostgresClient {
         let mut client = self.client.lock().expect("Lock was poisoned");
         let rows = client
             .query(
-                "SELECT experiments.name, description, researchers, version, date, id
-                FROM experiment_versions 
-                INNER JOIN experiments 
-                ON experiment_versions.name = experiments.name 
-                WHERE experiments.name = $1",
+                &format!(
+                    "SELECT experiments.name, description, researchers, version, date, id
+                    FROM {0}.experiment_versions 
+                    INNER JOIN {0}.experiments 
+                    ON experiment_versions.name = experiments.name 
+                    WHERE experiments.name = $1",
+                    self.schema
+                ),
                 &[&name],
             )
             .context("Failed to execute SQL query")?;
@@ -335,11 +380,13 @@ impl Database for PostgresClient {
                 // Fetch all variables that match the experiment
                 let variable_rows = client
                     .query(
-                        "SELECT variables.name, variables.description, experiment_variables.kind, variables.type
-                                FROM variables 
-                                INNER JOIN experiment_variables 
-                                ON experiment_variables.var_name = variables.name 
-                                WHERE experiment_variables.ex_name = $1 AND experiment_variables.ex_version_id = $2",
+                        &format!(
+                            "SELECT variables.name, variables.description, experiment_variables.kind, variables.type
+                            FROM {0}.variables 
+                            INNER JOIN {0}.experiment_variables 
+                            ON experiment_variables.var_name = variables.name 
+                            WHERE experiment_variables.ex_name = $1 AND experiment_variables.ex_version_id = $2", 
+                            self.schema),
                         &[&experiment_name, &experiment_version_id],
                     )
                     .context("Failed to fetch variables")?;
@@ -391,11 +438,14 @@ impl Database for PostgresClient {
         let mut client = self.client.lock().expect("Lock was poisoned");
         let rows = client
             .query(
-                "SELECT experiments.name, description, researchers, version, date
-                        FROM experiment_versions 
-                        INNER JOIN experiments 
-                        ON experiment_versions.name = experiments.name 
-                        WHERE experiment_versions.id = $1",
+                &format!(
+                    "SELECT experiments.name, description, researchers, version, date
+                    FROM {0}.experiment_versions 
+                    INNER JOIN {0}.experiments 
+                    ON experiment_versions.name = experiments.name 
+                    WHERE experiment_versions.id = $1",
+                    self.schema
+                ),
                 &[&version_id],
             )
             .context("Failed to execute SQL query")?;
@@ -414,11 +464,13 @@ impl Database for PostgresClient {
                 // Fetch all variables that match the experiment
                 let variable_rows = client
                     .query(
-                        "SELECT variables.name, variables.description, experiment_variables.kind, variables.type
-                                FROM variables 
-                                INNER JOIN experiment_variables 
-                                ON experiment_variables.var_name = variables.name 
-                                WHERE experiment_variables.ex_name = $1 AND experiment_variables.ex_version_id = $2",
+                        &format!(
+                            "SELECT variables.name, variables.description, experiment_variables.kind, variables.type
+                            FROM {0}.variables 
+                            INNER JOIN {0}.experiment_variables 
+                            ON experiment_variables.var_name = variables.name 
+                            WHERE experiment_variables.ex_name = $1 AND experiment_variables.ex_version_id = $2", 
+                            self.schema),
                         &[&experiment_name, &version_id],
                     )
                     .context("Failed to fetch variables")?;
@@ -463,15 +515,15 @@ impl Database for PostgresClient {
 
         let rows = client
             .query(
-                "SELECT id, var_name, value 
-                        FROM in_values 
-                        INNER JOIN experiment_instances 
-                        ON in_values.ex_instance_id = experiment_instances.id 
-                        WHERE experiment_instances.name = $1 AND experiment_instances.version_id = $2",
-                &[
-                    &experiment_version.name(),
-                    &experiment_version.id(),
-                ],
+                &format!(
+                    "SELECT id, var_name, value 
+                    FROM {0}.in_values 
+                    INNER JOIN {0}.experiment_instances 
+                    ON in_values.ex_instance_id = experiment_instances.id 
+                    WHERE experiment_instances.name = $1 AND experiment_instances.version_id = $2",
+                    self.schema
+                ),
+                &[&experiment_version.name(), &experiment_version.id()],
             )
             .context("Failed to execute SQL query")?;
 
@@ -503,7 +555,19 @@ impl Database for PostgresClient {
     ) -> Result<Option<ExperimentVersion>> {
         // Determine the ID of the ExperimentVersion that the instance belongs to
         let mut client = self.client.lock().expect("Lock was poisoned");
-        let rows = client.query("SELECT experiment_versions.id FROM experiment_instances INNER JOIN experiment_versions ON experiment_versions.id = experiment_instances.version_id WHERE experiment_instances.id = $1", &[&instance_id]).context("Failed to execute query")?;
+        let rows = client
+            .query(
+                &format!(
+                    "SELECT experiment_versions.id 
+                    FROM {0}.experiment_instances 
+                    INNER JOIN {0}.experiment_versions 
+                    ON experiment_versions.id = experiment_instances.version_id 
+                    WHERE experiment_instances.id = $1",
+                    self.schema
+                ),
+                &[&instance_id],
+            )
+            .context("Failed to execute query")?;
         drop(client);
 
         match rows.len() {
@@ -568,11 +632,14 @@ impl Database for PostgresClient {
 
         let rows = client
             .query(
-                "SELECT id, date, var_name, value 
-                        FROM runs 
-                        INNER JOIN measurements 
-                        ON measurements.run_id = runs.id
-                        WHERE runs.ex_instance_id = $1",
+                &format!(
+                    "SELECT id, date, var_name, value 
+                    FROM {0}.runs 
+                    INNER JOIN {0}.measurements 
+                    ON measurements.run_id = runs.id
+                    WHERE runs.ex_instance_id = $1",
+                    self.schema
+                ),
                 &[&experiment_instance.id()],
             )
             .context("Failed to execute SQL query")?;
@@ -589,11 +656,14 @@ impl Database for PostgresClient {
 
         let rows = client
             .query(
-                "SELECT id, date, var_name, value 
-                        FROM runs 
-                        INNER JOIN measurements 
-                        ON measurements.run_id = runs.id
-                        WHERE runs.ex_instance_id = $1 AND runs.date >= $2 AND runs.date < $3",
+                &format!(
+                    "SELECT id, date, var_name, value 
+                    FROM {0}.runs 
+                    INNER JOIN {0}.measurements 
+                    ON measurements.run_id = runs.id
+                    WHERE runs.ex_instance_id = $1 AND runs.date >= $2 AND runs.date < $3",
+                    self.schema
+                ),
                 &[
                     &experiment_instance.id(),
                     &date_range.start,
@@ -614,7 +684,7 @@ impl Database for PostgresClient {
 
         transaction
             .execute(
-                "INSERT INTO experiments (name) VALUES ($1)",
+                &format!("INSERT INTO {}.experiments (name) VALUES ($1)", self.schema),
                 &[&experiment.name()],
             )
             .with_context(|| {
@@ -624,7 +694,7 @@ impl Database for PostgresClient {
                 )
             })?;
 
-        Self::add_new_experiment_version(experiment, &mut transaction)?;
+        self.add_new_experiment_version(experiment, &mut transaction)?;
 
         transaction
             .commit()
@@ -641,7 +711,7 @@ impl Database for PostgresClient {
         let mut transaction = client
             .transaction()
             .context("Failed to begin transaction")?;
-        Self::add_new_experiment_version(experiment_version, &mut transaction)?;
+        self.add_new_experiment_version(experiment_version, &mut transaction)?;
 
         transaction
             .commit()
@@ -662,7 +732,7 @@ impl Database for PostgresClient {
         // Insert instance and new in_values
         transaction
             .execute(
-                "INSERT INTO experiment_instances (id, name, version_id) VALUES ($1, $2, $3)",
+                &format!("INSERT INTO {}.experiment_instances (id, name, version_id) VALUES ($1, $2, $3)", self.schema),
                 &[
                     &experiment_instance.id(),
                     &experiment_instance.experiment_version().name(),
@@ -681,7 +751,7 @@ impl Database for PostgresClient {
         for in_value in experiment_instance.input_variable_values() {
             transaction
                 .execute(
-                    "INSERT INTO in_values (ex_instance_id, var_name, value) VALUES ($1, $2, $3)",
+                    &format!("INSERT INTO {}.in_values (ex_instance_id, var_name, value) VALUES ($1, $2, $3)", self.schema),
                     &[
                         &experiment_instance.id(),
                         &in_value.variable().name(),
@@ -713,7 +783,10 @@ impl Database for PostgresClient {
         // Insert run, then insert measurements and link to run
         transaction
             .execute(
-                "INSERT INTO runs (ex_instance_id, id, date) VALUES ($1, $2, $3)",
+                &format!(
+                    "INSERT INTO {}.runs (ex_instance_id, id, date) VALUES ($1, $2, $3)",
+                    self.schema
+                ),
                 &[&run.experiment_instance().id(), &run.id(), &run.date()],
             )
             .with_context(|| format!("Failed to insert run {} into database", run.id()))?;
@@ -721,7 +794,10 @@ impl Database for PostgresClient {
         for measurement in run.measurements() {
             transaction
                 .execute(
-                    "INSERT INTO measurements (run_id, var_name, value) VALUES ($1, $2, $3)",
+                    &format!(
+                        "INSERT INTO {}.measurements (run_id, var_name, value) VALUES ($1, $2, $3)",
+                        self.schema
+                    ),
                     &[
                         &run.id(),
                         &measurement.variable().name(),
@@ -757,16 +833,20 @@ impl Database for PostgresClient {
             .context("Failed to begin transaction")?;
 
         for version in versions_of_experiment {
-            Self::delete_experiment_version(version.id(), &mut transaction).with_context(|| {
-                format!(
-                    "Failed to delete version {} of experiment {name}",
-                    version.id()
-                )
-            })?;
+            self.delete_experiment_version(version.id(), &mut transaction)
+                .with_context(|| {
+                    format!(
+                        "Failed to delete version {} of experiment {name}",
+                        version.id()
+                    )
+                })?;
         }
 
         transaction
-            .execute("DELETE FROM experiments WHERE name = $1", &[&name])
+            .execute(
+                &format!("DELETE FROM {}.experiments WHERE name = $1", self.schema),
+                &[&name],
+            )
             .with_context(|| format!("Failed to delete experiment {name}"))?;
         transaction
             .commit()
@@ -781,7 +861,7 @@ impl Database for PostgresClient {
             .transaction()
             .context("Failed to begin transaction")?;
 
-        Self::delete_experiment_version(experiment_version.id(), &mut transaction)?;
+        self.delete_experiment_version(experiment_version.id(), &mut transaction)?;
 
         transaction
             .commit()
@@ -798,7 +878,151 @@ impl Database for PostgresClient {
             .transaction()
             .context("Failed to begin transaction")?;
 
-        Self::delete_experiment_instance(experiment_instance.id(), &mut transaction)?;
+        self.delete_experiment_instance(experiment_instance.id(), &mut transaction)?;
+
+        transaction
+            .commit()
+            .context("Failed to execute transaction")?;
+        Ok(())
+    }
+
+    fn init_schema(&self, schema_name: &str) -> Result<()> {
+        let mut client = self.client.lock().expect("Lock was poisoned");
+        let mut transaction = client
+            .transaction()
+            .context("Failed to begin transaction")?;
+
+        transaction
+            .execute(&format!("CREATE SCHEMA IF NOT EXISTS {}", schema_name), &[])
+            .with_context(|| format!("Failed to create schema {schema_name}"))?;
+
+        // Create the following tables:
+        // - experiments: Stores all unique experiment names
+        // - experiment_versions: Stores all versions of all experiments
+        // - experiment_instances: Stores specific instances of experiment versions
+        // - variables: Stores varible definitions
+        // - experiment_variables: Links Experiment versions to variable definitions
+        // - in_values: Stores specific values for input variables of experiment instances
+        // - measurements: Stores measurements of experiment runs
+        // - runs: Stores experiment runs of experiment instances
+        transaction
+            .execute(
+                &format!(
+                    "CREATE TABLE {}.experiments (
+                        name text PRIMARY KEY NOT NULL
+                    )",
+                    schema_name
+                ),
+                &[],
+            )
+            .context("Failed to create 'experiments' table")?;
+        transaction
+            .execute(
+                &format!(
+                    "CREATE TABLE {0}.experiment_versions (
+                        id character varying(16) PRIMARY KEY NOT NULL,
+                        version text NOT NULL,
+                        name text NOT NULL,
+                        date timestamp with time zone NOT NULL,
+                        description text,
+                        researchers text,
+                        CONSTRAINT experiment_name FOREIGN KEY (name) REFERENCES {0}.experiments(name)
+                    )",
+                    schema_name
+                ),
+                &[],
+            )
+            .context("Failed to create 'experiment_versions' table")?;
+        transaction
+            .execute(
+                &format!(
+                    "CREATE TABLE {0}.experiment_instances (
+                        id character varying(16) PRIMARY KEY NOT NULL,
+                        name text NOT NULL,
+                        version_id character varying(16) NOT NULL,
+                        CONSTRAINT experiment_name FOREIGN KEY (name) REFERENCES {0}.experiments(name),
+                        CONSTRAINT version_id FOREIGN KEY (version_id) REFERENCES {0}.experiment_versions(id)
+                    )",
+                    schema_name
+                ),
+                &[],
+            )
+            .context("Failed to create 'experiment_instances' table")?;
+        transaction
+            .execute(
+                &format!(
+                    "CREATE TABLE {}.variables (
+                        name text PRIMARY KEY NOT NULL,
+                        description text,
+                        type text NOT NULL
+                    )",
+                    schema_name
+                ),
+                &[],
+            )
+            .context("Failed to create 'variables' table")?;
+        transaction
+            .execute(
+                &format!(
+                    "CREATE TABLE {0}.experiment_variables (
+                        var_name text NOT NULL,
+                        ex_name text NOT NULL,
+                        ex_version_id character varying(16) NOT NULL,
+                        kind text NOT NULL,
+                        UNIQUE (var_name, ex_version_id),
+                        CONSTRAINT experiment_name FOREIGN KEY (ex_name) REFERENCES {0}.experiments(name),
+                        CONSTRAINT experiment_version FOREIGN KEY (ex_version_id) REFERENCES {0}.experiment_versions(id),
+                        CONSTRAINT variable_name FOREIGN KEY (var_name) REFERENCES {0}.variables(name)
+                    )",
+                    schema_name
+                ),
+                &[],
+            )
+            .context("Failed to create 'experiment_variables' table")?;
+        transaction
+            .execute(
+                &format!(
+                    "CREATE TABLE {0}.in_values (
+                        ex_instance_id character varying(16) NOT NULL,
+                        var_name text NOT NULL,
+                        value text NOT NULL,
+                        CONSTRAINT experiment_instance_id FOREIGN KEY (ex_instance_id) REFERENCES {0}.experiment_instances(id),
+                        CONSTRAINT variable_name FOREIGN KEY (var_name) REFERENCES {0}.variables(name)
+                    )",
+                    schema_name
+                ),
+                &[],
+            )
+            .context("Failed to create 'in_values' table")?;
+        transaction
+            .execute(
+                &format!(
+                    "CREATE TABLE {0}.runs (
+                        id character varying(16) PRIMARY KEY NOT NULL,
+                        ex_instance_id character varying(16) NOT NULL,
+                        date timestamp with time zone NOT NULL,
+                        CONSTRAINT experiment_instance_id FOREIGN KEY (ex_instance_id) REFERENCES {0}.experiment_instances(id)
+                    )",
+                    schema_name
+                ),
+                &[],
+            )
+            .context("Failed to create 'runs' table")?;
+        transaction
+            .execute(
+                &format!(
+                    "CREATE TABLE {0}.measurements (
+                        run_id character varying(16) NOT NULL,
+                        var_name text NOT NULL,
+                        value text NOT NULL,
+                        CONSTRAINT run_id FOREIGN KEY (run_id) REFERENCES {0}.runs(id),
+                        CONSTRAINT variable_name FOREIGN KEY (var_name) REFERENCES {0}.variables(name)
+                    )",
+                    schema_name
+                ),
+                &[],
+            )
+            .context("Failed to create 'measurements' table")?;
 
         transaction
             .commit()

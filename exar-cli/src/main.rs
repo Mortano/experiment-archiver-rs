@@ -6,11 +6,11 @@ pub mod util;
 
 use std::fmt::Display;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use commands::{
-    configure::configure, list_experiments::list_experiments, list_instances::list_instances,
-    list_runs::list_runs, list_versions::list_versions,
+    configure::configure, init::init, list_experiments::list_experiments,
+    list_instances::list_instances, list_runs::list_runs, list_versions::list_versions,
 };
 
 use crate::{commands::configure::initial_configuration, configuration::Configuration};
@@ -21,6 +21,8 @@ use crate::{commands::configure::initial_configuration, configuration::Configura
 #[command(version)]
 #[command(about = "CLI for the exar crate", long_about = None)]
 struct Args {
+    /// Which configuration to use? If omitted, the default configuration is used
+    config: Option<String>,
     #[command(subcommand)]
     command: Commands,
 }
@@ -49,24 +51,33 @@ impl Display for OutputFormat {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Configure the database connections for this tool
     Configure,
+    /// Initialize a database so that it can store data in the `exar` format
+    Init,
+    /// List all known experiments in the database of the current configuration
     #[command(name = "lse")]
     ListExperiments {
+        /// Format in which the list is printed
         #[arg(short, long, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
     },
+    /// List all versions of the given experiment that are stored in the database of the current configuration
     #[command(name = "lsv")]
     ListVersions {
         /// Name of the experiment, or index as shown by `lse`
         name_or_id: String,
+        /// Format in which the list is printed
         #[arg(short, long, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
     },
+    /// Lists all instances of the given experiment version that are stored in the database of the current configuration
     #[command(name = "lsi")]
     ListInstances {
         /// ID of the version to list all instances for, as shown by `lsv`, or name of the experiment if the `--latest` flag
         /// is set
         version_id_or_name: String,
+        /// Format in which the list is printed
         #[arg(short, long, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
         /// Prints a statistical overview of the runs for each instance
@@ -76,47 +87,32 @@ enum Commands {
         #[arg(short, long, default_value_t = false)]
         latest: bool,
     },
+    /// List all runs of the given experiment instance that are stored in the database of the current configuration
     #[command(name = "lsr")]
     ListRuns {
         /// ID of the instance to list all runs for, as shown by `lsi`
         instance_id: String,
+        /// Format in which the list is printed
         #[arg(short, long, default_value_t = OutputFormat::Table)]
         format: OutputFormat,
-        /// Instead of printing each individual run, print a statistical overview of all runs by combining numerical measurements
+        /// Instead of printing each individual run, print a statistical overview of all runs by combining measurements
         #[arg(short, long, default_value_t = false)]
         statistics: bool,
         // TODO Time range filtering
-    }, // ListRuns {
-       //     experiment_name: String,
-       //     #[arg(short, long, default_value_t = false)]
-       //     as_csv: bool,
-       // },
-       // PrintRun {
-       //     run_id: String,
-       //     #[arg(short, long, default_value_t = false)]
-       //     as_csv: bool,
-       // },
-       // PrintAllRuns {
-       //     experiment_name: String,
-       //     #[arg(short, long, default_value_t = false)]
-       //     as_csv: bool,
-       // },
-       // DeleteExperiment {
-       //     experiment_name: String,
-       // },
-       // DeleteRuns {
-       //     experiment_name: String,
-       //     #[arg(
-       //         help = "The ID(s) of all runs that should be deleted. Can be a single number (e.g. \"4\") to delete one run, a comma-separated list (e.g. \"1,2,4\") to delete multiple runs, or an inclusive range (e.g. \"1-6\") to delete a range of consecutive runs"
-       //     )]
-       //     run_numbers: String,
-       // },
+    },
 }
 
-fn load_config() -> Result<()> {
+fn load_config(config_name: Option<&String>) -> Result<()> {
     let configuration = Configuration::load()?;
     if let Some(config) = configuration {
-        config.apply_default_config();
+        if let Some(config_name) = config_name {
+            let matching_config = config
+                .get_config_by_name(&config_name)
+                .ok_or_else(|| anyhow!("No config with name {config_name} found"))?;
+            matching_config.apply();
+        } else {
+            config.apply_default_config();
+        }
     } else {
         let (name, new_default_config) = initial_configuration()?;
         new_default_config.apply();
@@ -131,11 +127,12 @@ fn load_config() -> Result<()> {
 }
 
 fn main() -> Result<()> {
-    load_config().context("Failed to load default configuration")?;
-
     let args = Args::parse();
+    load_config(args.config.as_ref()).context("Failed to load default configuration")?;
+
     match args.command {
         Commands::Configure => configure(),
+        Commands::Init => init(),
         Commands::ListExperiments { format } => list_experiments(format),
         Commands::ListVersions { name_or_id, format } => list_versions(&name_or_id, format),
         Commands::ListInstances {

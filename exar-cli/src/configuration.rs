@@ -62,6 +62,10 @@ impl Configuration {
             .expect("No default config entry found")
     }
 
+    pub fn get_config_by_name(&self, name: &str) -> Option<&ConfigEntry> {
+        self.entries.get(name)
+    }
+
     pub fn add_entry(&mut self, name: String, entry: ConfigEntry) {
         self.entries.insert(name, entry);
     }
@@ -106,6 +110,7 @@ pub struct ConfigEntry {
     host: String,
     port: String,
     database_name: String,
+    schema_name: String,
     is_default: bool,
 }
 
@@ -116,6 +121,7 @@ impl ConfigEntry {
         host: String,
         port: String,
         database_name: String,
+        schema_name: String,
         is_default: bool,
     ) -> Self {
         Self {
@@ -124,6 +130,7 @@ impl ConfigEntry {
             host,
             port,
             database_name,
+            schema_name,
             is_default,
         }
     }
@@ -135,6 +142,7 @@ impl ConfigEntry {
         std::env::set_var("PSQL_HOST", &self.host);
         std::env::set_var("PSQL_PORT", &self.port);
         std::env::set_var("PSQL_DBNAME", &self.database_name);
+        std::env::set_var("PSQL_DBSCHEMA", &self.schema_name);
     }
 
     pub fn is_default(&self) -> bool {

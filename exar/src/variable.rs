@@ -57,7 +57,7 @@ impl DataType {
             DataType::Label | DataType::Text => Ok(GenericValue::String(value.to_string())),
             DataType::Bool => {
                 Ok(GenericValue::Bool(value.parse().with_context(|| {
-                    format!("Failed to parse value {value} as bool")
+                    format!("Failed to parse value {value} as bool")
                 })?))
             }
         }

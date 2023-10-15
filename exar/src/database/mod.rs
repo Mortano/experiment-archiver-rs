@@ -74,6 +74,9 @@ pub trait Database: Sync + Send {
         &self,
         experiment_instance: &ExperimentInstance<'_>,
     ) -> Result<()>;
+
+    /// Initialize the database schema `schema_name` with the necessary tables and relations for the `exar` format
+    fn init_schema(&self, schema_name: &str) -> Result<()>;
 }
 
 lazy_static! {

@@ -15,6 +15,28 @@ pub fn read_string_with_prompt<S: AsRef<str>>(prompt: S) -> Result<String> {
     Ok(ret.trim().to_string())
 }
 
+/// Like `read_string_with_prompt` but with an additional default value that is returned when enter is pressed
+pub fn read_string_with_prompt_and_default<P: AsRef<str>, D: AsRef<str>>(
+    prompt: P,
+    default: D,
+) -> Result<String> {
+    let mut ret = String::default();
+    print!(
+        "{} (Press enter for default ({})): ",
+        prompt.as_ref(),
+        default.as_ref()
+    );
+    std::io::stdout().flush()?;
+    std::io::stdin()
+        .read_line(&mut ret)
+        .context("Failed to read line")?;
+    if ret.trim().is_empty() {
+        Ok(default.as_ref().to_string())
+    } else {
+        Ok(ret.trim().to_string())
+    }
+}
+
 /// Like `read_string_with_prompt`, but prompts for a boolean value with `(y/n)` syntax
 pub fn read_bool_with_prompt<S: AsRef<str>>(prompt: S) -> Result<bool> {
     let mut choice = String::default();
