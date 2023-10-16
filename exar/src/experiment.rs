@@ -270,7 +270,7 @@ impl Display for ExperimentVersion {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExperimentInstance<'a> {
     experiment_version: &'a ExperimentVersion,
     input_variable_values: Vec<VariableValue<'a>>,

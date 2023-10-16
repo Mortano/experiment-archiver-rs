@@ -80,27 +80,46 @@ pub fn list_instances(
         // Get all runs for each instance
         let run_stats_per_instance = instances
             .iter()
-            .map(|instance| -> Result<_> {
+            .map(|instance| -> Result<Option<_>> {
                 let runs = db.fetch_all_runs_of_instance(instance).with_context(|| {
                     format!("Failed to fetch runs for instance {}", instance.id())
                 })?;
-                let stats = aggregate_runs(&runs);
-                Ok(stats)
+                if runs.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(aggregate_runs(&runs)))
+                }
             })
             .collect::<Result<Vec<_>>>()?;
+        // There might be instances that don't have runs. We filter these and only print stuff that has runs
+        let instances_that_have_runs = run_stats_per_instance
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, maybe_runs)| {
+                if maybe_runs.is_none() {
+                    None
+                } else {
+                    Some(instances[idx].clone())
+                }
+            })
+            .collect_vec();
+        let existing_runs = run_stats_per_instance
+            .into_iter()
+            .filter_map(|maybe_run| maybe_run)
+            .collect_vec();
 
         match output_format {
             OutputFormat::Table => {
-                print_instances_and_runs_as_table(&instances, &run_stats_per_instance)
+                print_instances_and_runs_as_table(&instances_that_have_runs, &existing_runs)
             }
             OutputFormat::CSV => {
-                print_instances_and_runs_as_csv(&instances, &run_stats_per_instance)
+                print_instances_and_runs_as_csv(&instances_that_have_runs, &existing_runs)
             }
             OutputFormat::JSON => {
-                print_instances_and_runs_as_json(&instances, &run_stats_per_instance)
+                print_instances_and_runs_as_json(&instances_that_have_runs, &existing_runs)
             }
             OutputFormat::YAML => {
-                print_instances_and_runs_as_yaml(&instances, &run_stats_per_instance)
+                print_instances_and_runs_as_yaml(&instances_that_have_runs, &existing_runs)
             }
         }
     } else {
