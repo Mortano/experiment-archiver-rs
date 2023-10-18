@@ -520,7 +520,8 @@ impl Database for PostgresClient {
                     FROM {0}.in_values 
                     INNER JOIN {0}.experiment_instances 
                     ON in_values.ex_instance_id = experiment_instances.id 
-                    WHERE experiment_instances.name = $1 AND experiment_instances.version_id = $2",
+                    WHERE experiment_instances.name = $1 AND experiment_instances.version_id = $2
+                    ORDER BY experiment_instances.id",
                     self.schema
                 ),
                 &[&experiment_version.name(), &experiment_version.id()],
