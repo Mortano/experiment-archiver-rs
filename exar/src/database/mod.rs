@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     ops::{Deref, Range},
     sync::{Arc, Mutex},
 };
@@ -54,6 +55,10 @@ pub trait Database: Sync + Send {
         &self,
         experiment_instance: &'a ExperimentInstance<'a>,
     ) -> Result<Vec<ExperimentRun<'a>>>;
+    fn fetch_runs_of_instances<'a>(
+        &self,
+        instances: &'a [ExperimentInstance<'a>],
+    ) -> Result<HashMap<&'a str, Vec<ExperimentRun<'a>>>>;
     fn fetch_runs_in_date_range<'a>(
         &self,
         experiment_instance: &'a ExperimentInstance<'a>,

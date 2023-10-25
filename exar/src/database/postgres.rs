@@ -1,4 +1,8 @@
-use std::{collections::HashSet, ops::Range, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::Mutex,
+};
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Utc};
@@ -76,12 +80,12 @@ impl PostgresClient {
         })
     }
 
-    fn parse_rows_to_runs<'a>(
-        rows: Vec<Row>,
+    fn parse_rows_to_runs<'a, 'b, I: Iterator<Item = &'b Row>>(
+        rows: I,
         experiment_instance: &'a ExperimentInstance<'a>,
     ) -> Result<Vec<ExperimentRun<'a>>> {
         let mut runs = vec![];
-        for (run_id, measurements) in &rows.iter().group_by(|row| row.get::<_, &str>("id")) {
+        for (run_id, measurements) in &rows.group_by(|row| row.get::<_, &str>("run_id")) {
             let mut date: Option<DateTime<Utc>> = None;
             let variable_values = measurements.map(|row| -> Result<VariableValue<'a>> {
                 // Hack: Get the date of the run while iterating over all measurement rows
@@ -634,7 +638,7 @@ impl Database for PostgresClient {
         let rows = client
             .query(
                 &format!(
-                    "SELECT id, date, var_name, value 
+                    "SELECT runs.id AS run_id, date, var_name, value 
                     FROM {0}.runs 
                     INNER JOIN {0}.measurements 
                     ON measurements.run_id = runs.id
@@ -645,7 +649,63 @@ impl Database for PostgresClient {
             )
             .context("Failed to execute SQL query")?;
 
-        Self::parse_rows_to_runs(rows, experiment_instance)
+        Self::parse_rows_to_runs(rows.iter(), experiment_instance)
+    }
+
+    fn fetch_runs_of_instances<'a>(
+        &self,
+        instances: &'a [ExperimentInstance<'a>],
+    ) -> Result<HashMap<&'a str, Vec<ExperimentRun<'a>>>> {
+        if instances.is_empty() {
+            return Ok(Default::default());
+        }
+        let version_id = instances[0].experiment_version().id();
+        if !instances
+            .iter()
+            .all(|i| i.experiment_version().id() == version_id)
+        {
+            bail!("All instances passed to this method must belong to the same ExperimentVersion");
+        }
+
+        let mut client = self.client.lock().expect("Lock was poisoned");
+        let rows = client
+            .query(
+                &format!(
+                    "SELECT experiment_instances.id AS instance_id, runs.id AS run_id, date, var_name, value 
+                    FROM {0}.runs 
+                    INNER JOIN {0}.measurements 
+                    ON measurements.run_id = runs.id
+                    INNER JOIN {0}.experiment_instances
+                    ON runs.ex_instance_id = experiment_instances.id
+                    WHERE experiment_instances.version_id = $1
+                    ORDER BY instance_id, run_id",
+                    self.schema
+                ),
+                &[&version_id],
+            )
+            .context("Failed to execute SQL query")?;
+
+        // Manually filter for instances that were passed to this function (query returns ALL instances of version)
+        let group_iter = rows
+            .iter()
+            .group_by(|row| row.get::<_, &str>("instance_id"));
+        let mut ret: HashMap<&'a str, Vec<ExperimentRun<'a>>> = Default::default();
+        for (instance, group) in group_iter
+            .into_iter()
+            .filter_map(|(instance_id, group_iter)| {
+                if let Some(instance) = instances.iter().find(|i| i.id() == instance_id) {
+                    Some((instance, group_iter))
+                } else {
+                    None
+                }
+            })
+        {
+            let runs_of_instance = Self::parse_rows_to_runs(group, instance)
+                .with_context(|| format!("Failed to parse runs for instance {}", instance.id()))?;
+            ret.insert(instance.id(), runs_of_instance);
+        }
+
+        Ok(ret)
     }
 
     fn fetch_runs_in_date_range<'a>(
@@ -658,7 +718,7 @@ impl Database for PostgresClient {
         let rows = client
             .query(
                 &format!(
-                    "SELECT id, date, var_name, value 
+                    "SELECT runs.id AS run_id, date, var_name, value 
                     FROM {0}.runs 
                     INNER JOIN {0}.measurements 
                     ON measurements.run_id = runs.id
@@ -673,7 +733,7 @@ impl Database for PostgresClient {
             )
             .context("Failed to execute SQL query")?;
 
-        Self::parse_rows_to_runs(rows, experiment_instance)
+        Self::parse_rows_to_runs(rows.iter(), experiment_instance)
     }
 
     fn insert_new_experiment(&self, experiment: &ExperimentVersion) -> Result<()> {

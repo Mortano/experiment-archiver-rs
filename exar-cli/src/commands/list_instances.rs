@@ -5,7 +5,7 @@ use crate::{
         print_serializable_as_json, print_serializable_as_yaml, variable_to_table_display,
         SerializableVariableValue,
     },
-    OutputFormat,
+    OutputFormat, TimeRange,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use exar::{database::db_connection, experiment::ExperimentInstance};
@@ -42,6 +42,7 @@ pub fn list_instances(
     output_format: OutputFormat,
     statistics: bool,
     latest: bool,
+    time_range: Option<TimeRange>,
 ) -> Result<()> {
     let db = db_connection();
     let version = if latest {
@@ -78,48 +79,49 @@ pub fn list_instances(
 
     if statistics {
         // Get all runs for each instance
-        let run_stats_per_instance = instances
-            .iter()
-            .map(|instance| -> Result<Option<_>> {
-                let runs = db.fetch_all_runs_of_instance(instance).with_context(|| {
-                    format!("Failed to fetch runs for instance {}", instance.id())
-                })?;
-                if runs.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(aggregate_runs(&runs)))
-                }
-            })
-            .collect::<Result<Vec<_>>>()?;
-        // There might be instances that don't have runs. We filter these and only print stuff that has runs
-        let instances_that_have_runs = run_stats_per_instance
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, maybe_runs)| {
-                if maybe_runs.is_none() {
-                    None
-                } else {
-                    Some(instances[idx].clone())
-                }
-            })
-            .collect_vec();
-        let existing_runs = run_stats_per_instance
-            .into_iter()
-            .filter_map(|maybe_run| maybe_run)
-            .collect_vec();
+        let runs_per_instance = db.fetch_runs_of_instances(&instances)?;
+        let (instances_that_have_runs, run_stats_per_instance): (Vec<_>, Vec<_>) =
+            runs_per_instance
+                .into_iter()
+                .filter_map(|(instance_id, mut runs)| {
+                    if let Some(time_range) = time_range.as_ref() {
+                        runs.retain(|run| {
+                            run.date() >= time_range.start() && run.date() <= time_range.end()
+                        });
+                    }
+                    if runs.is_empty() {
+                        None
+                    } else {
+                        let instance = instances
+                            .iter()
+                            .find(|i| i.id() == instance_id)
+                            .expect("Missing instance");
+                        Some((instance.clone(), aggregate_runs(&runs)))
+                    }
+                })
+                .unzip();
+
+        if instances_that_have_runs.is_empty() {
+            bail!(
+                "No instances with runs found for experiment {} @ version {}",
+                version.name(),
+                version.version()
+            );
+        }
 
         match output_format {
-            OutputFormat::Table => {
-                print_instances_and_runs_as_table(&instances_that_have_runs, &existing_runs)
-            }
+            OutputFormat::Table => print_instances_and_runs_as_table(
+                &instances_that_have_runs,
+                &run_stats_per_instance,
+            ),
             OutputFormat::CSV => {
-                print_instances_and_runs_as_csv(&instances_that_have_runs, &existing_runs)
+                print_instances_and_runs_as_csv(&instances_that_have_runs, &run_stats_per_instance)
             }
             OutputFormat::JSON => {
-                print_instances_and_runs_as_json(&instances_that_have_runs, &existing_runs)
+                print_instances_and_runs_as_json(&instances_that_have_runs, &run_stats_per_instance)
             }
             OutputFormat::YAML => {
-                print_instances_and_runs_as_yaml(&instances_that_have_runs, &existing_runs)
+                print_instances_and_runs_as_yaml(&instances_that_have_runs, &run_stats_per_instance)
             }
         }
     } else {

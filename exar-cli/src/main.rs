@@ -4,10 +4,11 @@ pub mod generic_table;
 pub mod statistics;
 pub mod util;
 
-use std::fmt::Display;
+use std::{fmt::Display, ops::RangeInclusive};
 
-use anyhow::{anyhow, Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use anyhow::{anyhow, bail, Context, Result};
+use chrono::{DateTime, Duration, Utc};
+use clap::{builder::ValueParser, Parser, Subcommand, ValueEnum};
 use commands::{
     configure::configure, init::init, list_experiments::list_experiments,
     list_instances::list_instances, list_runs::list_runs, list_versions::list_versions,
@@ -49,6 +50,33 @@ impl Display for OutputFormat {
     }
 }
 
+pub type TimeRange = RangeInclusive<DateTime<Utc>>;
+
+/// Parse a time range from a string. For now, we only support a single time value (seconds, minutes, hours etc.)
+/// with the resulting `TimeRange` being [now - time value; now].
+/// Possible time values follow the pattern: %NUMBER%UNIT, e.g. `30m`, `10s`, `2h` etc.
+fn parse_time_range(time_range: &str) -> Result<TimeRange> {
+    if time_range.len() < 2 {
+        bail!("Invalid time range value {time_range}");
+    }
+    // TODO More sophisticated parsing
+    let unit = &time_range[(time_range.len() - 1)..];
+    let quantity = &time_range[..(time_range.len() - 1)];
+    let quantity_number: i64 = quantity
+        .parse()
+        .context("Could not parse time quantity as number")?;
+    let now = Utc::now();
+    let start_time = match unit {
+        "s" => now - Duration::seconds(quantity_number),
+        "m" => now - Duration::minutes(quantity_number),
+        "h" => now - Duration::hours(quantity_number),
+        "d" => now - Duration::days(quantity_number),
+        other => bail!("Invalid time unit {other}"),
+    };
+
+    Ok(start_time..=now)
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Configure the database connections for this tool
@@ -86,6 +114,8 @@ enum Commands {
         /// List instances for the latest version of the experiment
         #[arg(short, long, default_value_t = false)]
         latest: bool,
+        #[arg(short, long, value_parser = ValueParser::new(parse_time_range))]
+        time_range: Option<TimeRange>,
     },
     /// List all runs of the given experiment instance that are stored in the database of the current configuration
     #[command(name = "lsr")]
@@ -140,7 +170,8 @@ fn main() -> Result<()> {
             format,
             statistics,
             latest,
-        } => list_instances(&version_id_or_name, format, statistics, latest),
+            time_range,
+        } => list_instances(&version_id_or_name, format, statistics, latest, time_range),
         Commands::ListRuns {
             instance_id,
             format,

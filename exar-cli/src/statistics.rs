@@ -123,7 +123,18 @@ pub fn aggregate_runs(runs: &[ExperimentRun<'_>]) -> RunStatistics {
 
             let aggregate = match variable.data_type() {
                 DataType::Unit(_) | DataType::Number => {
-                    let data = Data::new(values.map(|v| v.as_f64()).collect_vec());
+                    let data = Data::new(
+                        values
+                            .filter_map(|v| {
+                                let val = v.as_f64();
+                                if val.is_nan() {
+                                    None
+                                } else {
+                                    Some(val)
+                                }
+                            })
+                            .collect_vec(),
+                    );
                     AggregatedMeasurement::Numeric(AggregatedNumericValue {
                         average: data.mean().unwrap(),
                         median: data.median(),
